@@ -1,0 +1,19 @@
+[general]
+name=Granulometria por Fotointerpretacion
+qgisMinimumVersion=3.0
+description=Measures rock grain sizes in a photo by photointerpretation and exports gradation reports.
+about=Granulometria por Fotointerpretacion (Photointerpretation Grain Size Analysis) measures the size of rock grains in a georeferenced photo, typically captured by drone. The user draws the photo outline to obtain the total area, then draws or adjusts grain polygons (for example, produced by a segmentation tool such as GeoAI/Segment Anything). The plugin filters grains by a sieve-size threshold, computes coarse/fine material areas and percentages, and exports: (1) an Excel workbook with area/diameter data in a fixed template layout, (2) a second Excel workbook with image and material summary information, and (3) a GeoPackage bundling the polygon layer, the source photo raster, and an embedded QGIS project, exported as-is in the project's coordinate system (no reprojection). No external Python packages are required: the plugin only uses PyQt5 and qgis.core/qgis.gui, all of which ship with QGIS. The Excel files are written natively with the zipfile/XML standard library (no openpyxl dependency).
+version=1.0.0
+author=Jean Pardo
+email=jeandariopardo@gmail.com
+homepage=https://github.com/jeandariopardo-pixel/granulometria_fotointerpretacion
+tracker=https://github.com/jeandariopardo-pixel/granulometria_fotointerpretacion/issues
+repository=https://github.com/jeandariopardo-pixel/granulometria_fotointerpretacion
+icon=icon.png
+experimental=True
+category=Vector
+
+changelog=1.0.0 - First public release.
+
+[ui-strings]
+plugin_name_bar=Granulometria
