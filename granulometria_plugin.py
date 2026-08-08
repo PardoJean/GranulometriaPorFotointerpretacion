@@ -31,13 +31,13 @@ from qgis.core import (
     QgsVectorFileWriter, QgsCoordinateTransform, Qgis
 )
 from qgis.gui import QgsMapToolEmitPoint, QgsRubberBand
-from PyQt5.QtCore import QVariant, Qt, QSettings
-from PyQt5.QtWidgets import (
+from qgis.PyQt.QtCore import QVariant, Qt, QSettings
+from qgis.PyQt.QtWidgets import (
     QAction, QComboBox, QDialog, QVBoxLayout, QLabel, QPushButton, QMessageBox,
     QFileDialog, QFormLayout, QHBoxLayout, QProgressBar, QGroupBox,
     QGridLayout, QLineEdit, QCheckBox, QDialogButtonBox, QPlainTextEdit
 )
-from PyQt5.QtGui import QIcon, QColor
+from qgis.PyQt.QtGui import QIcon, QColor
 
 # ===========================================================================
 # TAMICES ESTÁNDAR ASTM (nombre, apertura en metros)
@@ -65,7 +65,7 @@ class PolygonMapTool(QgsMapToolEmitPoint):
         self.canvas = iface.mapCanvas()
         self.on_polygon_drawn = on_polygon_drawn
         self.points = []
-        self.rubber_band = QgsRubberBand(self.canvas, QgsWkbTypes.PolygonGeometry)
+        self.rubber_band = QgsRubberBand(self.canvas, QgsWkbTypes.GeometryType.PolygonGeometry)
         self.rubber_band.setColor(QColor(255, 0, 0, 100))
         self.rubber_band.setWidth(2)
 
@@ -95,7 +95,7 @@ class PolygonMapTool(QgsMapToolEmitPoint):
             self.iface.mapCanvas().unsetMapTool(self)
 
     def deactivate(self):
-        self.rubber_band.reset(QgsWkbTypes.PolygonGeometry)
+        self.rubber_band.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
         self.points = []
         super().deactivate()
 
@@ -107,7 +107,7 @@ class PolygonMapTool(QgsMapToolEmitPoint):
 def get_polygon_layers():
     return [lyr for lyr in QgsProject.instance().mapLayers().values()
             if isinstance(lyr, QgsVectorLayer)
-            and lyr.geometryType() == QgsWkbTypes.PolygonGeometry]
+            and lyr.geometryType() == QgsWkbTypes.GeometryType.PolygonGeometry]
 
 
 def get_raster_layers():
@@ -558,7 +558,7 @@ def export_geopackage(poly_layer, raster_layer, filepath, log_fn=None):
         poly_layer, filepath, QgsProject.instance().transformContext(), options
     )
     err_code = result[0] if isinstance(result, tuple) else result
-    if err_code == QgsVectorFileWriter.NoError:
+    if err_code == QgsVectorFileWriter.WriterError.NoError:
         ok_vector = True
         log(f"✔ Capa de polígonos exportada como '{base_name}' (CRS {poly_layer.crs().authid()}).")
     else:
@@ -713,7 +713,7 @@ def show_results_dialog(resumen, params, umbral_pulgadas):
     for i, (k, v) in enumerate(area_data):
         lbl_k = QLabel(k); lbl_k.setStyleSheet("font-weight: bold; color: #555;")
         lbl_v = QLabel(v); lbl_v.setStyleSheet("color: #0073e6; font-weight: bold;")
-        lbl_v.setAlignment(Qt.AlignRight)
+        lbl_v.setAlignment(Qt.AlignmentFlag.AlignRight)
         g0.addWidget(lbl_k, i, 0)
         g0.addWidget(lbl_v, i, 1)
     layout.addWidget(grp0)
@@ -731,7 +731,7 @@ def show_results_dialog(resumen, params, umbral_pulgadas):
     for i, (k, v) in enumerate(proc_data):
         lbl_k = QLabel(k); lbl_k.setStyleSheet("font-weight: bold; color: #555;")
         lbl_v = QLabel(v); lbl_v.setStyleSheet("color: #0073e6; font-weight: bold;")
-        lbl_v.setAlignment(Qt.AlignRight)
+        lbl_v.setAlignment(Qt.AlignmentFlag.AlignRight)
         g1.addWidget(lbl_k, i, 0)
         g1.addWidget(lbl_v, i, 1)
     layout.addWidget(grp1)
@@ -757,7 +757,7 @@ def show_results_dialog(resumen, params, umbral_pulgadas):
         lv = QLabel(v)
         color = "#27ae60" if "GW" in v else ("#e74c3c" if "GP" in v else "#0073e6")
         lv.setStyleSheet(f"color: {color}; font-weight: bold;")
-        lv.setAlignment(Qt.AlignRight)
+        lv.setAlignment(Qt.AlignmentFlag.AlignRight)
         g2.addWidget(lk, i, 0)
         g2.addWidget(lv, i, 1)
     layout.addWidget(grp2)
@@ -769,7 +769,7 @@ def show_results_dialog(resumen, params, umbral_pulgadas):
     btn.clicked.connect(dlg.accept)
     h = QHBoxLayout(); h.addStretch(); h.addWidget(btn); layout.addLayout(h)
 
-    dlg.exec_()
+    dlg.exec()
 
 
 def parse_inches(value_str):
@@ -830,7 +830,7 @@ def show_about_dialog(parent=None):
 
     title = QLabel("Análisis Granulométrico por Fotointerpretación")
     title.setStyleSheet("font-size: 12pt; font-weight: bold; color: #1a4a7a;")
-    title.setAlignment(Qt.AlignCenter)
+    title.setAlignment(Qt.AlignmentFlag.AlignCenter)
     layout.addWidget(title)
 
     grp1 = QGroupBox("¿Qué hace?")
@@ -849,7 +849,7 @@ def show_about_dialog(parent=None):
 
     lbl_meta = QLabel(f"Versión {PLUGIN_VERSION}  ·  {PLUGIN_FECHA}")
     lbl_meta.setStyleSheet("color: #888; font-size: 9pt;")
-    lbl_meta.setAlignment(Qt.AlignCenter)
+    lbl_meta.setAlignment(Qt.AlignmentFlag.AlignCenter)
     layout.addWidget(lbl_meta)
 
     btn = QPushButton("Cerrar")
@@ -858,7 +858,7 @@ def show_about_dialog(parent=None):
     btn.clicked.connect(dlg.accept)
     h = QHBoxLayout(); h.addStretch(); h.addWidget(btn); layout.addLayout(h)
 
-    dlg.exec_()
+    dlg.exec()
 
 
 # ===========================================================================
@@ -938,8 +938,8 @@ class ExportDialog(QDialog):
         self.log_box.setVisible(False)
         layout.addWidget(self.log_box)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.button(QDialogButtonBox.Ok).setText("Exportar")
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Exportar")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -1021,13 +1021,13 @@ def main_dialog(iface):
     # --- Título ---
     title = QLabel("Análisis Granulométrico por Fotointerpretación")
     title.setStyleSheet("font-size: 14pt; font-weight: bold; color: #1a4a7a; margin-bottom: 4px;")
-    title.setAlignment(Qt.AlignCenter)
+    title.setAlignment(Qt.AlignmentFlag.AlignCenter)
     layout.addWidget(title)
 
     # --- Grupo 1: Capas de trabajo ---
     grp_capas = QGroupBox("1. Capas de Trabajo")
     lay_capas = QFormLayout(grp_capas)
-    lay_capas.setRowWrapPolicy(QFormLayout.WrapAllRows)
+    lay_capas.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
     combo_layer = QComboBox()
     for lyr in layers:
         combo_layer.addItem(lyr.name(), lyr.id())
@@ -1063,7 +1063,7 @@ def main_dialog(iface):
     # --- Grupo 3: Parámetros ---
     grp_params = QGroupBox("3. Parámetros de Análisis")
     lay_params = QFormLayout(grp_params)
-    lay_params.setRowWrapPolicy(QFormLayout.WrapAllRows)
+    lay_params.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
     combo_umbral = QComboBox()
     combo_umbral.addItems(['4"', '3"', '2"', '1 1/2"', '1"', '3/4"', '1/2"', '3/8"'])
     combo_umbral.setCurrentText('3/4"')
@@ -1075,7 +1075,7 @@ def main_dialog(iface):
     # --- Grupo: Datos para información ---
     grp_info = QGroupBox("Datos para Información")
     lay_info = QFormLayout(grp_info)
-    lay_info.setRowWrapPolicy(QFormLayout.WrapAllRows)
+    lay_info.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
     lbl_dims = QLabel("—")
     lbl_mp = QLabel("—")
     lbl_mp.setStyleSheet("color: #0073e6; font-weight: bold;")
@@ -1161,7 +1161,7 @@ def main_dialog(iface):
         dialog.show()
         set_area_geom(geom)
         iface.messageBar().pushMessage("Éxito", "Contorno de área total actualizado.",
-                                       level=Qgis.Success, duration=3)
+                                       level=Qgis.MessageLevel.Success, duration=3)
 
     def on_dibujar():
         dialog.hide()
@@ -1266,7 +1266,7 @@ def main_dialog(iface):
         rlyr = QgsProject.instance().mapLayer(rid) if rid else None
 
         exp_dlg = ExportDialog(default_name=lyr.name())
-        if exp_dlg.exec_() != QDialog.Accepted:
+        if exp_dlg.exec() != QDialog.DialogCode.Accepted:
             return
 
         vals = exp_dlg.values()
@@ -1338,7 +1338,7 @@ def main_dialog(iface):
     btn_exportar.clicked.connect(on_exportar)
     btn_acerca_de.clicked.connect(lambda: show_about_dialog(dialog))
     dialog.finished.connect(cleanup)
-    dialog.exec_()
+    dialog.exec()
 
 
 # ===========================================================================
