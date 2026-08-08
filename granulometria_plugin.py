@@ -793,7 +793,7 @@ def parse_inches(value_str):
     return float(value_str)
 
 
-PLUGIN_VERSION = "1.0.0"
+PLUGIN_VERSION = "1.0.1"
 PLUGIN_FECHA = "2026-08-08"
 
 ACERCA_DE_QUE_HACE = (
@@ -807,6 +807,8 @@ ACERCA_DE_QUE_HACE = (
 )
 
 ACERCA_DE_NOVEDADES = (
+    "Versión 1.0.1:\n"
+    "  • Compatibilidad con Qt6 (enums calificados, imports vía qgis.PyQt).\n\n"
     "Versión 1.0.0:\n"
     "  • Primera versión pública del plugin."
 )
