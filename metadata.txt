@@ -13,7 +13,7 @@ icon=icon.png
 experimental=True
 category=Vector
 
-changelog=1.0.1 - Qt6 compatibility fixes: fully-qualified enums, imports via qgis.PyQt instead of PyQt5, exec_() renamed to exec().
+changelog=1.0.1 - Qt6 compatibility fixes: fully-qualified enums, imports via qgis.PyQt instead of PyQt5, exec_() renamed to exec(). Removed a silent except/pass in the GeoPackage overview-building step (now logs the error instead of discarding it).
     1.0.0 - First public release.
 
 [ui-strings]

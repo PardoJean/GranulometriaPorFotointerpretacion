@@ -600,8 +600,8 @@ def export_geopackage(poly_layer, raster_layer, filepath, log_fn=None):
             if ds is not None:
                 try:
                     ds.BuildOverviews("AVERAGE", [2, 4, 8, 16])
-                except Exception:
-                    pass
+                except Exception as e:
+                    log(f"— No se pudieron generar las pirámides de la foto: {e}")
                 ds = None
                 ok_raster = True
                 log(f"✔ Foto incrustada en la tabla ráster '{raster_table}' (CRS {raster_layer.crs().authid()}).")
