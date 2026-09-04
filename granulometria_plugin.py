@@ -1067,7 +1067,7 @@ def parse_inches(value_str):
     return float(value_str)
 
 
-PLUGIN_VERSION = "1.0.3"
+PLUGIN_VERSION = "1.0.2"
 PLUGIN_FECHA = "2026-09-04"
 
 ACERCA_DE_QUE_HACE = (
@@ -1093,20 +1093,6 @@ ACERCA_DE_LICENCIA = (
 )
 
 ACERCA_DE_NOVEDADES = (
-    "Versión 1.0.3:\n"
-    "  • En «Etiquetar Foto»: el texto libre queda apilado arriba de la "
-    "fecha (ambos abajo-izquierda) y el logo solo, abajo-derecha. Tamaño de "
-    "texto y ancho de logo por defecto: 60 px y 800 px.\n"
-    "  • El fondo blanco que traen estas fotos fuera del área realmente "
-    "fotografiada ahora se reemplaza por negro, cubriendo toda la zona.\n"
-    "  • La foto se rota a horizontal cuando es vertical, y ahora el archivo "
-    "exportado coincide exactamente con la vista previa (antes solo la "
-    "vista previa rotaba).\n"
-    "  • El nombre sugerido al guardar la foto etiquetada es la fecha.\n"
-    "  • La pestaña «Etiquetar Foto» ya no estira el diálogo: su contenido "
-    "va en un área con scroll propio.\n"
-    "  • Aviso de licencia y contacto (GPLv3; uso comercial/adaptación, "
-    "contactar antes al autor) en el «Acerca de» y el README.\n\n"
     "Versión 1.0.2:\n"
     "  • Nuevo paso opcional «Preparar Foto»: recortar la fotografía con un "
     "polígono de forma libre (sin pérdida de calidad) antes de analizarla, con "
@@ -1122,11 +1108,18 @@ ACERCA_DE_NOVEDADES = (
     "«Etiquetar Foto»), con apariencia nativa de QGIS (tema y fuente heredados, "
     "íconos del propio QGIS en vez de emojis) y foco de teclado visible.\n"
     "  • Nueva pestaña «Etiquetar Foto»: pega sobre la fotografía la fecha "
-    "(calendario, formato AAAA-MM-DD, abajo-izquierda), un texto libre y un "
-    "logo propio (recordado de forma privada) abajo-derecha, y la exporta como "
-    "imagen aparte para el informe.\n"
+    "(calendario, formato AAAA-MM-DD) con un texto libre apilado encima (ambos "
+    "abajo-izquierda) y un logo propio (recordado de forma privada) solo "
+    "abajo-derecha; tamaño de texto y ancho de logo por defecto 60 px y "
+    "800 px. El fondo blanco que traen estas fotos fuera del área realmente "
+    "fotografiada se reemplaza por negro y la foto se rota a horizontal "
+    "cuando es vertical — el archivo exportado coincide exactamente con la "
+    "vista previa. El nombre sugerido al guardar es la fecha, y la pestaña "
+    "va en un área con scroll propio para no estirar el diálogo.\n"
     "  • «Procesar Capa» ya no abre la tabla de atributos ni deja la capa "
-    "temporal del área total en el panel tras exportar.\n\n"
+    "temporal del área total en el panel tras exportar.\n"
+    "  • Aviso de licencia y contacto (GPLv3; uso comercial/adaptación, "
+    "contactar antes al autor) en el «Acerca de» y el README.\n\n"
     "Versión 1.0.1:\n"
     "  • Compatibilidad con Qt6 (enums calificados, imports vía qgis.PyQt).\n\n"
     "Versión 1.0.0:\n"
