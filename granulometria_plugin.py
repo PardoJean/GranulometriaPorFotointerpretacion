@@ -38,7 +38,7 @@ from qgis.PyQt.QtWidgets import (
     QAction, QComboBox, QDialog, QVBoxLayout, QLabel, QPushButton, QMessageBox,
     QFileDialog, QFormLayout, QHBoxLayout, QProgressBar, QGroupBox,
     QGridLayout, QLineEdit, QCheckBox, QDialogButtonBox, QPlainTextEdit, QTabWidget,
-    QWidget, QFrame
+    QWidget, QFrame, QMenu
 )
 from qgis.PyQt.QtGui import QIcon, QColor
 
@@ -104,26 +104,46 @@ TAMICES_STD = [
 # ===========================================================================
 
 class PolygonMapTool(QgsMapToolEmitPoint):
-    def __init__(self, iface, on_polygon_drawn):
+    def __init__(self, iface, on_polygon_drawn, freehand=False):
         super().__init__(iface.mapCanvas())
         self.iface = iface
         self.canvas = iface.mapCanvas()
         self.on_polygon_drawn = on_polygon_drawn
+        self.freehand = freehand
         self.points = []
+        self._dragging = False
         self.rubber_band = QgsRubberBand(self.canvas, QgsWkbTypes.GeometryType.PolygonGeometry)
         self.rubber_band.setColor(QColor(255, 0, 0, 100))
         self.rubber_band.setWidth(2)
 
     def canvasPressEvent(self, e):
-        if e.button() == 1:
-            self.points.append(self.toMapCoordinates(e.pos()))
+        if e.button() == Qt.MouseButton.LeftButton:
+            if self.freehand:
+                self._dragging = True
+                self.points = [self.toMapCoordinates(e.pos())]
+            else:
+                self.points.append(self.toMapCoordinates(e.pos()))
             self.update_rubber_band()
-        elif e.button() == 2:
+        elif e.button() == Qt.MouseButton.RightButton:
             self.finalize_polygon()
 
     def canvasMoveEvent(self, e):
-        if self.points:
+        if self.freehand and self._dragging:
+            self.points.append(self.toMapCoordinates(e.pos()))
+            self.update_rubber_band()
+        elif self.points:
             self.update_rubber_band(self.toMapCoordinates(e.pos()))
+
+    def canvasReleaseEvent(self, e):
+        if self.freehand and self._dragging and e.button() == Qt.MouseButton.LeftButton:
+            self._dragging = False
+            self.finalize_polygon()
+
+    def keyPressEvent(self, e):
+        if e.key() == Qt.Key.Key_Escape:
+            self._dragging = False
+            self.points = []
+            self.rubber_band.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
 
     def update_rubber_band(self, temporary_point=None):
         pts = list(self.points)
@@ -142,6 +162,7 @@ class PolygonMapTool(QgsMapToolEmitPoint):
     def deactivate(self):
         self.rubber_band.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
         self.points = []
+        self._dragging = False
         super().deactivate()
 
 
@@ -912,7 +933,7 @@ def parse_inches(value_str):
     return float(value_str)
 
 
-PLUGIN_VERSION = "1.1.0"
+PLUGIN_VERSION = "1.2.0"
 PLUGIN_FECHA = "2026-09-04"
 
 ACERCA_DE_QUE_HACE = (
@@ -930,6 +951,16 @@ ACERCA_DE_QUE_HACE = (
 )
 
 ACERCA_DE_NOVEDADES = (
+    "Versión 1.2.0:\n"
+    "  • El recorte se puede dibujar de dos formas: manual (clic por clic) o a "
+    "mano alzada (arrastrando el mouse). Se elige desde el propio botón "
+    "«Dibujar Recorte».\n"
+    "  • Escape reinicia el trazo en curso (recorte o contorno de área total) "
+    "sin salir de la herramienta de dibujo.\n"
+    "  • «Procesar Capa» y «Exportar Todo» ahora solo se muestran en la "
+    "pestaña «Analizar».\n"
+    "  • El recorte anterior desaparece del lienzo al empezar a dibujar uno "
+    "nuevo.\n\n"
     "Versión 1.1.0:\n"
     "  • Recorte de la fotografía dentro del plugin, con un polígono de forma "
     "libre y sin pérdida de calidad (misma resolución, compresión LZW).\n"
@@ -1180,6 +1211,10 @@ def main_dialog(iface):
     lay_recorte.setSpacing(8)
     hbtn_recorte = QHBoxLayout()
     btn_dibujar_recorte = QPushButton("✏  Dibujar Recorte")
+    menu_recorte = QMenu(btn_dibujar_recorte)
+    act_recorte_manual = menu_recorte.addAction("Manual (clic por clic)")
+    act_recorte_freehand = menu_recorte.addAction("A mano alzada (arrastrar)")
+    btn_dibujar_recorte.setMenu(menu_recorte)
     btn_guardar_recorte = QPushButton("💾  Guardar y Exportar…")
     btn_guardar_recorte.setEnabled(False)
     hbtn_recorte.addWidget(btn_dibujar_recorte)
@@ -1314,7 +1349,7 @@ def main_dialog(iface):
         iface.mapCanvas().setMapTool(dialog.map_tool)
         iface.messageBar().pushMessage("Herramienta Activada",
                                        "Dibuja el contorno del área total en el mapa. "
-                                       "Clic derecho para finalizar.",
+                                       "Clic derecho para finalizar. Escape para reiniciar el trazo.",
                                        duration=7)
 
     # ---- Recorte de la foto ----
@@ -1337,16 +1372,28 @@ def main_dialog(iface):
         lbl_recorte_estado.setText(f"Recorte definido: {geom.area():.4f} m²")
         btn_guardar_recorte.setEnabled(True)
 
-    def on_dibujar_recorte():
+    def on_dibujar_recorte(freehand):
         if get_selected_raster() is None:
             return
+
+        # Si había un recorte previo sin guardar, desaparece: no confundirlo
+        # con el trazo nuevo que está por empezar.
+        dialog._crop_geom = None
+        dialog._crop_rubber.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
+        lbl_recorte_estado.setText("Sin recorte definido.")
+        btn_guardar_recorte.setEnabled(False)
+        iface.mapCanvas().refresh()
+
         dialog.hide()
-        dialog.map_tool = PolygonMapTool(iface, on_recorte_dibujado)
+        dialog.map_tool = PolygonMapTool(iface, on_recorte_dibujado, freehand=freehand)
         iface.mapCanvas().setMapTool(dialog.map_tool)
-        iface.messageBar().pushMessage("Herramienta Activada",
-                                       "Dibuja el recorte sobre la foto: clic izquierdo para "
-                                       "agregar vértices, clic derecho para cerrar.",
-                                       duration=7)
+        if freehand:
+            msg = ("Dibuja el recorte arrastrando el mouse sobre la foto. "
+                   "Suelta el botón para cerrar el polígono. Escape para reiniciar el trazo.")
+        else:
+            msg = ("Dibuja el recorte sobre la foto: clic izquierdo para agregar vértices, "
+                   "clic derecho para cerrar. Escape para reiniciar el trazo.")
+        iface.messageBar().pushMessage("Herramienta Activada", msg, duration=7)
 
     def on_guardar_recorte():
         rlyr = get_selected_raster()
@@ -1542,13 +1589,20 @@ def main_dialog(iface):
         else:
             QMessageBox.warning(dialog, "Advertencia", "No se generó ningún archivo.")
 
+    # ---- Procesar/Exportar solo tienen sentido en la pestaña "Analizar" ----
+    def on_tab_changed(index):
+        en_analizar = (tabs.widget(index) is tab_analizar)
+        btn_procesar.setVisible(en_analizar)
+        btn_exportar.setVisible(en_analizar)
+
     def cleanup():
         if dialog.area_layer:
             QgsProject.instance().removeMapLayer(dialog.area_layer.id())
         if dialog._crop_rubber:
             dialog._crop_rubber.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
 
-    btn_dibujar_recorte.clicked.connect(on_dibujar_recorte)
+    act_recorte_manual.triggered.connect(lambda: on_dibujar_recorte(freehand=False))
+    act_recorte_freehand.triggered.connect(lambda: on_dibujar_recorte(freehand=True))
     btn_guardar_recorte.clicked.connect(on_guardar_recorte)
     btn_dibujar.clicked.connect(on_dibujar)
     btn_contorno_raster.clicked.connect(on_usar_contorno_raster)
@@ -1556,6 +1610,8 @@ def main_dialog(iface):
     btn_procesar.clicked.connect(on_procesar)
     btn_exportar.clicked.connect(on_exportar)
     btn_acerca_de.clicked.connect(lambda: show_about_dialog(dialog))
+    tabs.currentChanged.connect(on_tab_changed)
+    on_tab_changed(tabs.currentIndex())
     dialog.finished.connect(cleanup)
     dialog.exec()
 
