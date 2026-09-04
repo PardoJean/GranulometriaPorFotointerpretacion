@@ -23,10 +23,11 @@ itself, only measurement and reporting.
 
 ## Requirements
 
-- QGIS 3.0 or newer (tested on QGIS 3.42).
-- No external Python packages. The plugin only uses `PyQt5` and
-  `qgis.core` / `qgis.gui`, which ship with every standard QGIS
-  installation (Windows/OSGeo4W, Linux, macOS) — nothing extra to install.
+- QGIS 3.22 or newer (tested on QGIS 3.42).
+- No external Python packages. The plugin only uses Qt (via `qgis.PyQt`,
+  compatible with both Qt5 and Qt6) and `qgis.core` / `qgis.gui`, which ship
+  with every standard QGIS installation (Windows/OSGeo4W, Linux, macOS) —
+  nothing extra to install.
 
 ## Installation
 

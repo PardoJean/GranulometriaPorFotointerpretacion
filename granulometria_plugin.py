@@ -95,6 +95,7 @@ class PolygonMapTool(QgsMapToolEmitPoint):
         self.modo = modo
         self.points = []
         self._streaming = False
+        self._finalizado = False
         self.rubber_band = QgsRubberBand(self.canvas, QgsWkbTypes.GeometryType.PolygonGeometry)
         self.rubber_band.setColor(QColor(255, 0, 0, 100))
         self.rubber_band.setWidth(2)
@@ -151,8 +152,10 @@ class PolygonMapTool(QgsMapToolEmitPoint):
                 self._streaming = False
                 self.rubber_band.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
             else:
-                # Nada que borrar: cancela y devuelve el control al diálogo.
+                # Nada que borrar: cancela y devuelve el control al diálogo. Se marca
+                # _finalizado para que deactivate() no vuelva a invocar on_cancel.
                 cb = self.on_cancel
+                self._finalizado = True
                 self.iface.mapCanvas().unsetMapTool(self)
                 if cb:
                     cb()
@@ -176,6 +179,7 @@ class PolygonMapTool(QgsMapToolEmitPoint):
 
     def finalize_polygon(self):
         if len(self.points) > 2:
+            self._finalizado = True
             self.on_polygon_drawn(QgsGeometry.fromPolygonXY([self.points]))
             self.iface.mapCanvas().unsetMapTool(self)
 
@@ -183,6 +187,11 @@ class PolygonMapTool(QgsMapToolEmitPoint):
         self.rubber_band.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
         self.points = []
         super().deactivate()
+        if not self._finalizado and self.on_cancel:
+            # Nos desactivaron desde fuera (el usuario eligió otra herramienta de QGIS
+            # mientras dibujábamos): sin esto el diálogo se queda oculto para siempre,
+            # porque _start_dibujo() lo ocultó esperando on_polygon_drawn u on_cancel.
+            self.on_cancel()
 
 
 # ===========================================================================
@@ -246,6 +255,14 @@ def process_polygons(layer, progress_bar=None, umbral_pulgadas=0.75, area_total_
     n = len(features)
     ids_delete = []
 
+    if n == 0:
+        return {
+            'area_total': total_area, 'area_gruesos': 0.0, 'area_finos': total_area,
+            'pct_gruesos': 0.0, 'pct_finos': 100.0 if total_area > 0 else 0.0,
+            'inconsistente': False, 'eliminados': 0, 'irregulares': 0,
+            'iniciales': 0, 'finales': 0, 'sin_poligonos': True
+        }
+
     layer.startEditing()
     for i, feat in enumerate(features):
         if progress_bar:
@@ -283,9 +300,9 @@ def process_polygons(layer, progress_bar=None, umbral_pulgadas=0.75, area_total_
         ratio_bbox = area / bbox_area if bbox_area > 0 else 0
 
         if (aspect <= 3) or (0.7 <= ratio_circ <= 1.3) or (ratio_bbox >= 0.7):
-            final_d = round(min_d, 2)
+            final_d = round(min_d, 4)
         else:
-            final_d = round(max(w, h), 2)
+            final_d = round(max(w, h), 4)
             irregular_count += 1
 
         layer.changeAttributeValue(feat.id(), idx_num, number)
@@ -328,7 +345,8 @@ def process_polygons(layer, progress_bar=None, umbral_pulgadas=0.75, area_total_
         'eliminados': small_count,
         'irregulares': irregular_count,
         'iniciales': initial_count,
-        'finales': initial_count - small_count
+        'finales': initial_count - small_count,
+        'sin_poligonos': False
     }
 
 
@@ -864,18 +882,27 @@ def raster_footprint_geom(raster_layer, log_fn=None):
         lyr = mem.CreateLayer("f", geom_type=ogr.wkbPolygon)
         lyr.CreateField(ogr.FieldDefn("v", ogr.OFTInteger))
         gdal.Polygonize(band.GetMaskBand(), band.GetMaskBand(), lyr, 0)
+        ds = None  # cierra el ráster fuente cuanto antes (evita dejarlo abierto en Windows)
 
-        union = None
+        # ponytail: nos quedamos con el polígono de mayor área en vez de unir todo
+        # con .Union() uno por uno — Polygonize sobre el borde comprimido/antialiaseado
+        # de una ortofoto real devuelve fácilmente miles de motas, y unir de a una es
+        # cuadrático en GEOS (podía colgar la GUI varios minutos). La huella útil de
+        # una sola foto es su componente principal; si algún día hay fotos con dos
+        # zonas fotografiadas disjuntas, cambiar a ogr.wkbMultiPolygon + UnionCascaded().
+        mejor, mejor_area = None, 0.0
         for feat in lyr:
             if feat.GetField("v") == 0:
                 continue
             g = feat.GetGeometryRef()
-            union = g.Clone() if union is None else union.Union(g)
-        if union is None or union.GetArea() <= 0:
+            a = g.GetArea()
+            if a > mejor_area:
+                mejor, mejor_area = g.Clone(), a
+        if mejor is None or mejor_area <= 0:
             log("✘ La huella calculada del ráster está vacía.")
             return None
 
-        geom = QgsGeometry.fromWkt(union.ExportToWkt())
+        geom = QgsGeometry.fromWkt(mejor.ExportToWkt())
         if geom.constGet().nCoordinates() > 20000:
             px = raster_layer.rasterUnitsPerPixelX()
             geom = geom.simplify(px / 2)
@@ -1067,7 +1094,7 @@ def parse_inches(value_str):
     return float(value_str)
 
 
-PLUGIN_VERSION = "1.0.2"
+PLUGIN_VERSION = "1.0.3"
 PLUGIN_FECHA = "2026-09-04"
 
 ACERCA_DE_QUE_HACE = (
@@ -1078,8 +1105,9 @@ ACERCA_DE_QUE_HACE = (
     "recorte se guarda como un GeoTIFF nuevo, sin pérdida de calidad, y se carga "
     "listo para analizarlo.\n"
     "1) Dibujas o generas el contorno de toda la foto: esa es el área total.\n"
-    "2) El plugin mide cada polígono (grano) que hayas segmentado y descarta los "
-    "más pequeños que el tamiz que elijas.\n"
+    "2) El plugin mide cada polígono (grano) que hayas segmentado y elimina de la "
+    "capa los más pequeños que el tamiz que elijas (su área pasa a contarse como "
+    "material fino; esta eliminación es permanente).\n"
     "3) El área de los granos que quedan (≥ tamiz) es el material grueso.\n"
     "4) El área total menos el área de gruesos es el material fino."
 )
@@ -1093,6 +1121,25 @@ ACERCA_DE_LICENCIA = (
 )
 
 ACERCA_DE_NOVEDADES = (
+    "Versión 1.0.3 (primera versión estable, no experimental):\n"
+    "  • Corregido un error de cuantización que redondeaba el diámetro de cada "
+    "grano a 2 decimales en metros (escalones de 1 cm), lo que afectaba la "
+    "columna «Diámetro» del Excel y los tamices más finos de la curva "
+    "granulométrica (D10/D30/Cu/Cc); ahora conserva 4 decimales.\n"
+    "  • El cálculo de la huella real de la foto ya no une miles de polígonos "
+    "de borde uno por uno (podía congelar QGIS varios minutos en fotos de dron "
+    "grandes); ahora toma directamente el polígono principal.\n"
+    "  • La herramienta de dibujo ya no deja el diálogo oculto para siempre si "
+    "eliges otra herramienta de QGIS a mitad de un trazo, y se desactiva "
+    "correctamente al cerrar el diálogo.\n"
+    "  • Nuevos avisos cuando la capa de polígonos está vacía, el contorno de "
+    "área total se autointersecta, o la foto no tiene un sistema de "
+    "coordenadas válido — antes producían un reporte con números incorrectos "
+    "sin ninguna advertencia.\n"
+    "  • El aviso de «no hay capas de polígono» ahora se muestra en rojo "
+    "(error), no en verde (éxito).\n"
+    "  • Requisito mínimo declarado subido a QGIS 3.22 (el mínimo real de la "
+    "API que usa el plugin desde la 1.0.2).\n\n"
     "Versión 1.0.2:\n"
     "  • Nuevo paso opcional «Preparar Foto»: recortar la fotografía con un "
     "polígono de forma libre (sin pérdida de calidad) antes de analizarla, con "
@@ -1277,7 +1324,7 @@ def main_dialog(iface):
     layers = get_polygon_layers()
     if not layers:
         iface.messageBar().pushMessage("Error", "No hay capas de polígono en el proyecto",
-                                       level=3, duration=5)
+                                       level=Qgis.MessageLevel.Critical, duration=5)
         return
 
     dialog = QDialog()
@@ -1598,6 +1645,14 @@ def main_dialog(iface):
 
     # ---- Área total: helpers ----
     def set_area_geom(geom):
+        if not geom.isGeosValid():
+            area_antes = geom.area()
+            geom = geom.makeValid()
+            iface.messageBar().pushMessage(
+                "Aviso", "El contorno dibujado se autointersectaba y fue corregido "
+                f"automáticamente (área antes: {area_antes:.4f} m², después: "
+                f"{geom.area():.4f} m²). Revísalo si el número no coincide con lo esperado.",
+                level=Qgis.MessageLevel.Warning, duration=8)
         if dialog.area_layer is None:
             dialog.area_layer = _crear_area_layer()
         dialog.area_layer.dataProvider().truncate()
@@ -1827,6 +1882,12 @@ def main_dialog(iface):
             QMessageBox.critical(dialog, "Error", "No se pudo encontrar la capa ráster seleccionada.")
             return
 
+        if not rlyr.crs().isValid():
+            QMessageBox.warning(dialog, "Aviso",
+                                "Esta foto no tiene un sistema de coordenadas válido: el área "
+                                "calculada no estará en m² reales, aunque se muestre con esa "
+                                "unidad. Verifica la georreferenciación de la foto.")
+
         proj_crs = QgsProject.instance().crs()
 
         # Huella real de los píxeles con datos (no el rectángulo envolvente):
@@ -1897,6 +1958,15 @@ def main_dialog(iface):
 
         umbral = get_umbral()
         resumen = process_polygons(lyr, progress_bar, umbral, area_geom)
+
+        progress_bar.setVisible(False)
+        btn_procesar.setEnabled(True)
+
+        if resumen.get('sin_poligonos'):
+            QMessageBox.warning(dialog, "Advertencia",
+                                "La capa de polígonos no tiene ningún grano segmentado.")
+            return
+
         gradation, fine_area, pct_finos = calculate_gradation_curve(lyr, resumen['area_total'])
         gparams = calculate_D_params(gradation) if gradation else {}
 
@@ -2005,6 +2075,12 @@ def main_dialog(iface):
             QgsProject.instance().removeMapLayer(dialog.area_layer.id())
         if dialog._crop_rubber:
             dialog._crop_rubber.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
+        # Si el diálogo se cierra con la herramienta de dibujo todavía activa, hay que
+        # desactivarla ahora: si no, el próximo polígono dispararía on_polygon_drawn
+        # (dialog.show()) sobre un QDialog de Qt ya destruido.
+        if dialog.map_tool is not None and iface.mapCanvas().mapTool() is dialog.map_tool:
+            dialog.map_tool._finalizado = True  # el diálogo ya se cierra: no reabrirlo
+            iface.mapCanvas().unsetMapTool(dialog.map_tool)
 
     act_recorte_segmento.triggered.connect(lambda: on_dibujar_recorte("segmento"))
     act_recorte_flujo.triggered.connect(lambda: on_dibujar_recorte("flujo"))
