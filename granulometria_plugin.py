@@ -38,9 +38,11 @@ from qgis.PyQt.QtWidgets import (
     QAction, QComboBox, QDialog, QVBoxLayout, QLabel, QPushButton, QMessageBox,
     QFileDialog, QFormLayout, QHBoxLayout, QProgressBar, QGroupBox,
     QGridLayout, QLineEdit, QCheckBox, QDialogButtonBox, QPlainTextEdit, QTabWidget,
-    QWidget, QFrame, QMenu, QDateEdit, QSpinBox
+    QWidget, QFrame, QMenu, QDateEdit, QSpinBox, QScrollArea
 )
-from qgis.PyQt.QtGui import QIcon, QColor, QImage, QPainter, QFont, QFontMetrics, QPixmap
+from qgis.PyQt.QtGui import (
+    QIcon, QColor, QImage, QPainter, QFont, QFontMetrics, QPixmap, QTransform
+)
 
 # ===========================================================================
 # HOJA DE ESTILO ÚNICA (main_dialog, ExportDialog, show_about_dialog)
@@ -889,8 +891,8 @@ def raster_footprint_geom(raster_layer, log_fn=None):
 # ===========================================================================
 
 def compose_watermark(qimage, date_text, extra_text, logo_path, font_px, logo_width_px):
-    """Devuelve una copia de qimage con la fecha pegada abajo-izquierda y,
-    abajo-derecha, el logo (si hay) apilado encima del texto libre. No
+    """Devuelve una copia de qimage con el texto libre apilado arriba de la
+    fecha, ambos abajo-izquierda, y el logo (si hay) solo abajo-derecha. No
     modifica qimage. Fuente Arial blanca, igual para fecha y texto.
     """
     out = QImage(qimage)
@@ -903,21 +905,20 @@ def compose_watermark(qimage, date_text, extra_text, logo_path, font_px, logo_wi
     painter.setPen(QColor("white"))
     fm = QFontMetrics(font)
 
+    y = out.height() - margin
     if date_text:
-        painter.drawText(margin, out.height() - margin, date_text)
+        painter.drawText(margin, y, date_text)
+        y -= fm.height()
+    if extra_text:
+        painter.drawText(margin, y, extra_text)
 
-    y_bottom_right = out.height() - margin
-    if logo_path and os.path.exists(logo_path):
+    if logo_path and os.path.exists(logo_path) and logo_width_px > 0:
         logo = QImage(logo_path)
-        if not logo.isNull() and logo_width_px > 0:
+        if not logo.isNull():
             logo = logo.scaledToWidth(logo_width_px, Qt.TransformationMode.SmoothTransformation)
             x_logo = out.width() - margin - logo.width()
-            y_logo = y_bottom_right - logo.height() - (fm.height() if extra_text else 0)
+            y_logo = out.height() - margin - logo.height()
             painter.drawImage(x_logo, y_logo, logo)
-
-    if extra_text:
-        w = fm.horizontalAdvance(extra_text)
-        painter.drawText(out.width() - margin - w, y_bottom_right, extra_text)
 
     painter.end()
     return out
@@ -1402,15 +1403,15 @@ def main_dialog(iface):
         combo_raster_etiqueta.addItem(r.name(), r.id())
     form_etiqueta.addRow("Fotografía:", combo_raster_etiqueta)
 
+    txt_extra = QLineEdit()
+    txt_extra.setPlaceholderText("Texto libre (abajo-izq., sobre la fecha), p. ej. sitio o técnico")
+    form_etiqueta.addRow("Texto (abajo-izq.):", txt_extra)
+
     date_edit = QDateEdit()
     date_edit.setCalendarPopup(True)
     date_edit.setDisplayFormat("yyyy-MM-dd")
     date_edit.setDate(QDate.currentDate())
-    form_etiqueta.addRow("Fecha (abajo-izq.):", date_edit)
-
-    txt_extra = QLineEdit()
-    txt_extra.setPlaceholderText("Texto libre (abajo-der.), p. ej. sitio o técnico")
-    form_etiqueta.addRow("Texto (abajo-der.):", txt_extra)
+    form_etiqueta.addRow("Fecha (abajo-izq., bajo el texto):", date_edit)
     lay_etiqueta.addLayout(form_etiqueta)
 
     h_logo = QHBoxLayout()
@@ -1469,9 +1470,19 @@ def main_dialog(iface):
     lay_analizar.addWidget(grp_params)
     lay_analizar.addStretch()
 
+    # Envuelto en QScrollArea: sin esto, el sizeHint() de esta pestaña (la más
+    # alta, por la vista previa) se propaga al QTabWidget entero y estira
+    # "Preparar Foto"/"Analizar" aunque no lo necesiten — QScrollArea acota su
+    # propio sizeHint en vez de heredar el alto real del contenido.
+    scroll_etiqueta = QScrollArea()
+    scroll_etiqueta.setWidgetResizable(True)
+    scroll_etiqueta.setFrameShape(QFrame.Shape.NoFrame)
+    scroll_etiqueta.setWidget(grp_etiqueta)
+
     tab_etiqueta = QWidget()
     lay_tab_etiqueta = QVBoxLayout(tab_etiqueta)
-    lay_tab_etiqueta.addWidget(grp_etiqueta)
+    lay_tab_etiqueta.setContentsMargins(0, 0, 0, 0)
+    lay_tab_etiqueta.addWidget(scroll_etiqueta)
 
     tabs = QTabWidget()
     tabs.addTab(tab_preparar, "Preparar Foto")
@@ -1714,17 +1725,22 @@ def main_dialog(iface):
             lbl_preview_etiqueta.setPixmap(QPixmap())
             lbl_preview_etiqueta.setText("No se pudo leer la fotografía.")
             return
+        # Rotación solo visual: las fotos del laboratorio son verticales y
+        # desperdician el recuadro horizontal de la vista previa. El archivo
+        # que se guarda (on_guardar_etiqueta) usa siempre "img" sin rotar.
+        img_previa = img.transformed(QTransform().rotate(90)) if img.height() > img.width() else img
+
         box_w, box_h = 480, 260
-        if img.width() > box_w or img.height() > box_h:
-            small = img.scaled(box_w, box_h, Qt.AspectRatioMode.KeepAspectRatio,
-                               Qt.TransformationMode.SmoothTransformation)
+        if img_previa.width() > box_w or img_previa.height() > box_h:
+            small = img_previa.scaled(box_w, box_h, Qt.AspectRatioMode.KeepAspectRatio,
+                                      Qt.TransformationMode.SmoothTransformation)
         else:
-            small = img
+            small = img_previa
         # Los tamaños de fuente/logo están en píxeles de la imagen real; se
         # escalan por el mismo factor que la miniatura para que la vista
         # previa coincida visualmente con lo que sale al exportar en tamaño
         # completo.
-        factor = small.width() / img.width()
+        factor = small.width() / img_previa.width()
         composed = compose_watermark(
             small, date_edit.date().toString("yyyy-MM-dd"), txt_extra.text(),
             _logo_path(), max(1, round(spin_font.value() * factor)),
@@ -1748,7 +1764,10 @@ def main_dialog(iface):
 
         settings = QSettings()
         last_folder = settings.value("GranulometriaGFI/ultima_carpeta", "")
-        default_name = f"{rlyr.name()}_etiquetada.png"
+        # Nombre sugerido = la misma fecha que se pega en la foto; el usuario
+        # puede agregarle algo al final en el propio diálogo de guardado para
+        # distinguir varias del mismo día.
+        default_name = f"{date_edit.date().toString('yyyy-MM-dd')}.png"
         default_path = os.path.join(last_folder, default_name) if last_folder else default_name
         out_path, _ = QFileDialog.getSaveFileName(
             dialog, "Guardar foto etiquetada", default_path, "PNG (*.png);;JPEG (*.jpg)"
