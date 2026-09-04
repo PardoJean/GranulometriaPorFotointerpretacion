@@ -24,6 +24,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import os
 import math
+import tempfile
+import shutil
 
 from qgis.core import (
     QgsField, QgsProject, QgsGeometry, QgsWkbTypes, QgsVectorLayer, QgsFeature,
@@ -35,9 +37,52 @@ from qgis.PyQt.QtCore import QVariant, Qt, QSettings
 from qgis.PyQt.QtWidgets import (
     QAction, QComboBox, QDialog, QVBoxLayout, QLabel, QPushButton, QMessageBox,
     QFileDialog, QFormLayout, QHBoxLayout, QProgressBar, QGroupBox,
-    QGridLayout, QLineEdit, QCheckBox, QDialogButtonBox, QPlainTextEdit
+    QGridLayout, QLineEdit, QCheckBox, QDialogButtonBox, QPlainTextEdit, QTabWidget,
+    QWidget, QFrame
 )
 from qgis.PyQt.QtGui import QIcon, QColor
+
+# ===========================================================================
+# HOJA DE ESTILO ÚNICA (main_dialog, ExportDialog, show_about_dialog)
+# ===========================================================================
+DIALOG_STYLE = """
+QDialog { background-color: #f7f7f7; font-family: 'Segoe UI', Arial, sans-serif; }
+QGroupBox { background-color: #ffffff; border: 1px solid #dddddd;
+            border-radius: 8px; margin-top: 16px; padding: 14px 10px 10px 10px;
+            font-weight: bold; color: #333333; }
+QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left;
+                   left: 8px; padding: 0 4px; background: transparent; }
+QLabel { color: #444444; font-size: 10pt; }
+QPushButton { background-color: #f0f0f0; color: #333333; border: 1px solid #cccccc;
+              border-radius: 4px; padding: 6px 12px; font-size: 10pt; font-weight: bold; }
+QPushButton:hover { background-color: #e0e0e0; border-color: #aaaaaa; }
+QPushButton:pressed { background-color: #d0d0d0; }
+QPushButton:focus { border: 2px solid #0073e6; padding: 5px 11px; }
+QPushButton#primary_button { background-color: #0073e6; color: white; border: 1px solid #0073e6; }
+QPushButton#primary_button:hover { background-color: #005cb8; }
+QPushButton#primary_button:pressed { background-color: #004c99; }
+QPushButton#primary_button:focus { border: 2px solid #1a4a7a; padding: 5px 11px; }
+QPushButton:disabled { background-color: #e8e8e8; color: #aaaaaa; border-color: #dddddd; }
+QComboBox, QListWidget, QLineEdit, QPlainTextEdit {
+    background-color: white; border: 1px solid #cccccc;
+    border-radius: 4px; padding: 4px; font-size: 10pt; color: #333333;
+}
+QComboBox:focus, QLineEdit:focus, QPlainTextEdit:focus { border: 2px solid #0073e6; }
+QComboBox:disabled, QLineEdit:disabled { background-color: #eeeeee; color: #aaaaaa; }
+QCheckBox { color: #444444; font-size: 10pt; }
+QProgressBar { border: 1px solid #cccccc; border-radius: 4px; text-align: center; color: #333333; }
+QProgressBar::chunk { background-color: #0073e6; border-radius: 3px; }
+QTabWidget::pane { border: 1px solid #dddddd; border-radius: 6px; background: #ffffff; top: -1px; }
+QTabBar::tab {
+    background: #f0f0f0; color: #555555; border: 1px solid #dddddd; border-bottom: none;
+    border-top-left-radius: 6px; border-top-right-radius: 6px;
+    min-width: 120px; height: 24px; padding: 6px 4px;
+    font-weight: bold; font-size: 10pt; margin-right: 2px;
+}
+QTabBar::tab:selected { background: #ffffff; color: #1a4a7a; border-bottom: 3px solid #0073e6; }
+QTabBar::tab:hover:!selected { background: #e6e6e6; }
+QTabBar::tab:focus { border: 2px solid #0073e6; }
+"""
 
 # ===========================================================================
 # TAMICES ESTÁNDAR ASTM (nombre, apertura en metros)
@@ -673,6 +718,80 @@ def export_geopackage(poly_layer, raster_layer, filepath, log_fn=None):
 
 
 # ===========================================================================
+# RECORTE DE LA FOTOGRAFÍA (paso previo al análisis)
+# ===========================================================================
+
+def crop_raster_by_polygon(raster_layer, geom, out_path, log_fn=None):
+    """Recorta la foto con un polígono de forma libre y escribe un GeoTIFF nuevo.
+
+    Sin pérdida de calidad: se conserva la resolución original (xRes/yRes de la
+    capa), el remuestreo es 'near' (ningún píxel se interpola) y la compresión
+    es LZW (sin pérdida). Lo que queda fuera del polígono sale transparente
+    gracias a la banda alfa, no en negro.
+
+    Igual que en export_geopackage, no se reproyecta nada: el polígono se lleva
+    al CRS del ráster si hiciera falta, pero la foto se escribe con las mismas
+    coordenadas que ya tiene.
+    """
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    from osgeo import gdal
+    gdal.UseExceptions()
+
+    src_path = raster_layer.source().split('|')[0]
+    tmp_dir = tempfile.mkdtemp(prefix="gfi_recorte_")
+    cutline_path = os.path.join(tmp_dir, "recorte.gpkg")
+
+    try:
+        raster_crs = raster_layer.crs()
+        proj_crs = QgsProject.instance().crs()
+        crop_geom = QgsGeometry(geom)
+        if proj_crs != raster_crs:
+            tr = QgsCoordinateTransform(proj_crs, raster_crs, QgsProject.instance())
+            crop_geom.transform(tr)
+
+        cut_layer = QgsVectorLayer(f"Polygon?crs={raster_crs.authid()}", "recorte", "memory")
+        feat = QgsFeature(cut_layer.fields())
+        feat.setGeometry(crop_geom)
+        cut_layer.dataProvider().addFeatures([feat])
+
+        options = QgsVectorFileWriter.SaveVectorOptions()
+        options.driverName = "GPKG"
+        options.layerName = "recorte"
+        result = QgsVectorFileWriter.writeAsVectorFormatV3(
+            cut_layer, cutline_path, QgsProject.instance().transformContext(), options
+        )
+        err_code = result[0] if isinstance(result, tuple) else result
+        if err_code != QgsVectorFileWriter.WriterError.NoError:
+            log(f"✘ No se pudo preparar el polígono de recorte: {result}")
+            return False
+
+        ds = gdal.Warp(
+            out_path, src_path,
+            cutlineDSName=cutline_path,
+            cropToCutline=True,
+            xRes=raster_layer.rasterUnitsPerPixelX(),
+            yRes=raster_layer.rasterUnitsPerPixelY(),
+            resampleAlg="near",
+            dstAlpha=True,
+            creationOptions=["COMPRESS=LZW", "TILED=YES", "BIGTIFF=IF_SAFER"],
+        )
+        if ds is None:
+            log("✘ GDAL no pudo generar el recorte de la foto.")
+            return False
+        ds = None
+        log(f"✔ Foto recortada guardada en: {out_path}")
+        return True
+    except Exception as e:
+        log(f"✘ Error al recortar la foto: {e}")
+        return False
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+# ===========================================================================
 # DIÁLOGOS
 # ===========================================================================
 
@@ -793,12 +912,16 @@ def parse_inches(value_str):
     return float(value_str)
 
 
-PLUGIN_VERSION = "1.0.1"
-PLUGIN_FECHA = "2026-08-08"
+PLUGIN_VERSION = "1.1.0"
+PLUGIN_FECHA = "2026-09-04"
 
 ACERCA_DE_QUE_HACE = (
     "Este plugin mide el tamaño de los granos de roca en una foto y calcula qué "
     "porcentaje del área es material grueso y qué porcentaje es material fino.\n\n"
+    "0) (Opcional) En la pestaña «Preparar Foto» recortas la fotografía con un "
+    "polígono de forma libre, para quedarte solo con la zona representativa. El "
+    "recorte se guarda como un GeoTIFF nuevo, sin pérdida de calidad, y se carga "
+    "listo para analizarlo.\n"
     "1) Dibujas o generas el contorno de toda la foto: esa es el área total.\n"
     "2) El plugin mide cada polígono (grano) que hayas segmentado y descarta los "
     "más pequeños que el tamiz que elijas.\n"
@@ -807,6 +930,11 @@ ACERCA_DE_QUE_HACE = (
 )
 
 ACERCA_DE_NOVEDADES = (
+    "Versión 1.1.0:\n"
+    "  • Recorte de la fotografía dentro del plugin, con un polígono de forma "
+    "libre y sin pérdida de calidad (misma resolución, compresión LZW).\n"
+    "  • Interfaz reorganizada en dos pestañas: «Preparar Foto» y «Analizar».\n"
+    "  • Foco de teclado visible en todos los controles y mejor contraste.\n\n"
     "Versión 1.0.1:\n"
     "  • Compatibilidad con Qt6 (enums calificados, imports vía qgis.PyQt).\n\n"
     "Versión 1.0.0:\n"
@@ -818,14 +946,7 @@ def show_about_dialog(parent=None):
     dlg = QDialog(parent)
     dlg.setWindowTitle("Acerca de — Granulometría por Fotointerpretación")
     dlg.setMinimumWidth(480)
-    dlg.setStyleSheet("""
-        QDialog { background-color: #f7f7f7; font-family: Arial; }
-        QGroupBox { background: white; border: 1px solid #ddd; border-radius: 6px;
-                    margin-top: 1ex; font-weight: bold; color: #333; }
-        QGroupBox::title { subcontrol-origin: margin; padding: 0 8px; margin-left: 8px;
-                           background: #f7f7f7; }
-        QLabel { color: #444; font-size: 10pt; }
-    """)
+    dlg.setStyleSheet(DIALOG_STYLE)
     layout = QVBoxLayout(dlg)
     layout.setSpacing(10)
     layout.setContentsMargins(14, 14, 14, 14)
@@ -850,7 +971,7 @@ def show_about_dialog(parent=None):
     layout.addWidget(grp2)
 
     lbl_meta = QLabel(f"Versión {PLUGIN_VERSION}  ·  {PLUGIN_FECHA}")
-    lbl_meta.setStyleSheet("color: #888; font-size: 9pt;")
+    lbl_meta.setStyleSheet("color: #666666; font-size: 9pt;")
     lbl_meta.setAlignment(Qt.AlignmentFlag.AlignCenter)
     layout.addWidget(lbl_meta)
 
@@ -875,16 +996,7 @@ class ExportDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Exportar Todo")
         self.setMinimumWidth(480)
-        self.setStyleSheet("""
-            QDialog { background-color: #f7f7f7; font-family: Arial; }
-            QGroupBox { background: white; border: 1px solid #ddd; border-radius: 6px;
-                        margin-top: 1ex; font-weight: bold; color: #333; }
-            QGroupBox::title { subcontrol-origin: margin; padding: 0 8px; margin-left: 8px;
-                               background: #f7f7f7; }
-            QLabel { color: #444; font-size: 10pt; }
-            QLineEdit, QPlainTextEdit { background: white; border: 1px solid #ccc;
-                        border-radius: 4px; padding: 4px; }
-        """)
+        self.setStyleSheet(DIALOG_STYLE)
 
         settings = QSettings()
         last_folder = settings.value("GranulometriaGFI/ultima_carpeta", "")
@@ -913,7 +1025,7 @@ class ExportDialog(QDialog):
         lbl_crs_info = QLabel("El GeoPackage se exporta con las coordenadas actuales "
                               "de cada capa (sin reproyectar).")
         lbl_crs_info.setWordWrap(True)
-        lbl_crs_info.setStyleSheet("color: #888; font-size: 9pt;")
+        lbl_crs_info.setStyleSheet("color: #666666; font-size: 9pt;")
         layout.addWidget(lbl_crs_info)
 
         # --- Qué exportar ---
@@ -980,32 +1092,16 @@ def main_dialog(iface):
     dialog.setWindowTitle("Análisis Granulométrico por Fotointerpretación")
     dialog.setMinimumWidth(540)
 
-    STYLE = """
-    QDialog { background-color: #f7f7f7; font-family: Arial, sans-serif; }
-    QGroupBox { background-color: #ffffff; border: 1px solid #dddddd;
-                border-radius: 8px; margin-top: 1ex; font-weight: bold; color: #333; }
-    QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left;
-                       padding: 0 10px; margin-left: 10px; background-color: #f7f7f7; }
-    QLabel { color: #444444; font-size: 10pt; }
-    QPushButton { background-color: #f0f0f0; color: #333333; border: 1px solid #cccccc;
-                  border-radius: 4px; padding: 6px 12px; font-size: 10pt; font-weight: bold; }
-    QPushButton:hover { background-color: #e0e0e0; border-color: #aaaaaa; }
-    QPushButton:pressed { background-color: #d0d0d0; }
-    QPushButton#primary_button { background-color: #0073e6; color: white; border: 1px solid #0073e6; }
-    QPushButton#primary_button:hover { background-color: #005cb8; }
-    QPushButton#primary_button:pressed { background-color: #004c99; }
-    QPushButton:disabled { background-color: #e8e8e8; color: #aaaaaa; border-color: #dddddd; }
-    QComboBox, QListWidget { background-color: white; border: 1px solid #cccccc;
-                             border-radius: 4px; padding: 4px; font-size: 10pt; }
-    QProgressBar { border: 1px solid #cccccc; border-radius: 4px; text-align: center; color: #333; }
-    QProgressBar::chunk { background-color: #0073e6; border-radius: 3px; }
-    """
-    dialog.setStyleSheet(STYLE)
+    # ponytail: el diálogo fija su propio tema claro en vez de heredar el de
+    # QGIS. Adaptarse al tema oscuro exigiría tokenizar cada color y probar
+    # ambos temas; si algún día se pide, ese es el camino.
+    dialog.setStyleSheet(DIALOG_STYLE)
 
     # Estado del diálogo para compartir entre funciones
     dialog._resumen = None
     dialog._gradation = None
     dialog._params = None
+    dialog._crop_geom = None
 
     crs = QgsProject.instance().crs().authid()
     dialog.area_layer = QgsVectorLayer(f"Polygon?crs={crs}", "Área Total (Temporal)", "memory")
@@ -1016,6 +1112,13 @@ def main_dialog(iface):
     dialog.area_layer.setRenderer(QgsSingleSymbolRenderer(symbol))
     dialog.map_tool = None
 
+    # Contorno del recorte, visible sobre el lienzo mientras el diálogo vive
+    dialog._crop_rubber = QgsRubberBand(iface.mapCanvas(),
+                                        QgsWkbTypes.GeometryType.PolygonGeometry)
+    dialog._crop_rubber.setColor(QColor(0, 153, 76, 60))
+    dialog._crop_rubber.setStrokeColor(QColor(0, 153, 76, 255))
+    dialog._crop_rubber.setWidth(2)
+
     layout = QVBoxLayout(dialog)
     layout.setSpacing(12)
     layout.setContentsMargins(15, 15, 15, 15)
@@ -1025,6 +1128,12 @@ def main_dialog(iface):
     title.setStyleSheet("font-size: 14pt; font-weight: bold; color: #1a4a7a; margin-bottom: 4px;")
     title.setAlignment(Qt.AlignmentFlag.AlignCenter)
     layout.addWidget(title)
+
+    # Selector de la foto: vive en la pestaña "Preparar Foto", pero es el mismo
+    # combo que usa "Usar Contorno del Ráster" en la pestaña "Analizar".
+    combo_raster = QComboBox()
+    for r in get_raster_layers():
+        combo_raster.addItem(r.name(), r.id())
 
     # --- Grupo 1: Capas de trabajo ---
     grp_capas = QGroupBox("1. Capas de Trabajo")
@@ -1037,13 +1146,6 @@ def main_dialog(iface):
     lbl_count = QLabel("—")
     lbl_count.setStyleSheet("color: #0073e6; font-weight: bold;")
     lay_capas.addRow("Polígonos en capa:", lbl_count)
-
-    combo_raster = QComboBox()
-    rasters = get_raster_layers()
-    for r in rasters:
-        combo_raster.addItem(r.name(), r.id())
-    lay_capas.addRow("Foto (ráster):", combo_raster)
-    layout.addWidget(grp_capas)
 
     # --- Grupo 2: Área total (contorno de la foto) ---
     grp_area = QGroupBox("2. Área Total (Contorno de la Foto)")
@@ -1060,7 +1162,6 @@ def main_dialog(iface):
     lbl_area_total.setStyleSheet("color: #0073e6; font-weight: bold;")
     lay_area.addLayout(hbtn)
     lay_area.addWidget(lbl_area_total)
-    layout.addWidget(grp_area)
 
     # --- Grupo 3: Parámetros ---
     grp_params = QGroupBox("3. Parámetros de Análisis")
@@ -1072,12 +1173,25 @@ def main_dialog(iface):
     combo_umbral.setToolTip("Partículas menores a este diámetro serán eliminadas del análisis "
                              "y su área pasa a contabilizarse como material fino.")
     lay_params.addRow("Eliminar partículas menores a:", combo_umbral)
-    layout.addWidget(grp_params)
 
-    # --- Grupo: Datos para información ---
-    grp_info = QGroupBox("Datos para Información")
+    # --- Grupo: Recorte de la foto ---
+    grp_recorte = QGroupBox("Recorte (opcional)")
+    lay_recorte = QVBoxLayout(grp_recorte)
+    lay_recorte.setSpacing(8)
+    hbtn_recorte = QHBoxLayout()
+    btn_dibujar_recorte = QPushButton("✏  Dibujar Recorte")
+    btn_guardar_recorte = QPushButton("💾  Guardar y Exportar…")
+    btn_guardar_recorte.setEnabled(False)
+    hbtn_recorte.addWidget(btn_dibujar_recorte)
+    hbtn_recorte.addWidget(btn_guardar_recorte)
+    lbl_recorte_estado = QLabel("Sin recorte definido.")
+    lay_recorte.addLayout(hbtn_recorte)
+    lay_recorte.addWidget(lbl_recorte_estado)
+
+    # --- Grupo: Datos de la imagen ---
+    grp_info = QGroupBox("Datos de la Imagen")
     lay_info = QFormLayout(grp_info)
-    lay_info.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
+    lay_info.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
     lbl_dims = QLabel("—")
     lbl_mp = QLabel("—")
     lbl_mp.setStyleSheet("color: #0073e6; font-weight: bold;")
@@ -1085,14 +1199,43 @@ def main_dialog(iface):
     lay_info.addRow("Dimensiones (px):", lbl_dims)
     lay_info.addRow("Tamaño de imagen:", lbl_mp)
     lay_info.addRow("Tamaño de píxel (m):", lbl_pixel)
-    layout.addWidget(grp_info)
+
+    # --- Pestañas: primero se prepara la foto, después se analiza ---
+    tab_preparar = QWidget()
+    lay_preparar = QVBoxLayout(tab_preparar)
+    lay_preparar.setSpacing(12)
+    form_foto = QFormLayout()
+    form_foto.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
+    form_foto.addRow("Fotografía (ráster):", combo_raster)
+    lay_preparar.addLayout(form_foto)
+    lay_preparar.addWidget(grp_recorte)
+    lay_preparar.addWidget(grp_info)
+    lay_preparar.addStretch()
+
+    tab_analizar = QWidget()
+    lay_analizar = QVBoxLayout(tab_analizar)
+    lay_analizar.setSpacing(12)
+    lay_analizar.addWidget(grp_capas)
+    lay_analizar.addWidget(grp_area)
+    lay_analizar.addWidget(grp_params)
+    lay_analizar.addStretch()
+
+    tabs = QTabWidget()
+    tabs.addTab(tab_preparar, "Preparar Foto")
+    tabs.addTab(tab_analizar, "Analizar")
+    layout.addWidget(tabs)
 
     # --- Barra de progreso ---
     progress_bar = QProgressBar()
     progress_bar.setVisible(False)
     layout.addWidget(progress_bar)
 
-    # --- Botones de acción ---
+    # --- Botones de acción (fuera de las pestañas: siempre visibles) ---
+    sep = QFrame()
+    sep.setFrameShape(QFrame.Shape.HLine)
+    sep.setStyleSheet("color: #dddddd;")
+    layout.addWidget(sep)
+
     hact = QHBoxLayout()
     btn_acerca_de = QPushButton("ℹ  Acerca de")
     hact.addWidget(btn_acerca_de)
@@ -1173,6 +1316,76 @@ def main_dialog(iface):
                                        "Dibuja el contorno del área total en el mapa. "
                                        "Clic derecho para finalizar.",
                                        duration=7)
+
+    # ---- Recorte de la foto ----
+    def get_selected_raster():
+        rid = combo_raster.currentData()
+        if not rid:
+            QMessageBox.warning(dialog, "Advertencia", "Selecciona primero una foto (ráster).")
+            return None
+        rlyr = QgsProject.instance().mapLayer(rid)
+        if not rlyr:
+            QMessageBox.critical(dialog, "Error", "No se pudo encontrar la capa ráster seleccionada.")
+            return None
+        return rlyr
+
+    def on_recorte_dibujado(geom):
+        dialog.show()
+        dialog._crop_geom = geom
+        dialog._crop_rubber.setToGeometry(geom, None)
+        iface.mapCanvas().refresh()
+        lbl_recorte_estado.setText(f"Recorte definido: {geom.area():.4f} m²")
+        btn_guardar_recorte.setEnabled(True)
+
+    def on_dibujar_recorte():
+        if get_selected_raster() is None:
+            return
+        dialog.hide()
+        dialog.map_tool = PolygonMapTool(iface, on_recorte_dibujado)
+        iface.mapCanvas().setMapTool(dialog.map_tool)
+        iface.messageBar().pushMessage("Herramienta Activada",
+                                       "Dibuja el recorte sobre la foto: clic izquierdo para "
+                                       "agregar vértices, clic derecho para cerrar.",
+                                       duration=7)
+
+    def on_guardar_recorte():
+        rlyr = get_selected_raster()
+        if rlyr is None or dialog._crop_geom is None:
+            return
+
+        settings = QSettings()
+        last_folder = settings.value("GranulometriaGFI/ultima_carpeta", "")
+        default_name = f"{rlyr.name()}_recorte.tif"
+        default_path = os.path.join(last_folder, default_name) if last_folder else default_name
+        out_path, _ = QFileDialog.getSaveFileName(
+            dialog, "Guardar foto recortada", default_path, "GeoTIFF (*.tif)"
+        )
+        if not out_path:
+            return
+        if not out_path.lower().endswith(".tif"):
+            out_path += ".tif"
+
+        mensajes = []
+        ok = crop_raster_by_polygon(rlyr, dialog._crop_geom, out_path, log_fn=mensajes.append)
+        if not ok:
+            QMessageBox.critical(dialog, "Error",
+                                 "No se pudo recortar la foto:\n\n" + "\n".join(mensajes))
+            return
+
+        settings.setValue("GranulometriaGFI/ultima_carpeta", os.path.dirname(out_path))
+
+        nueva = QgsRasterLayer(out_path, os.path.splitext(os.path.basename(out_path))[0])
+        if nueva.isValid():
+            QgsProject.instance().addMapLayer(nueva)
+            combo_raster.addItem(nueva.name(), nueva.id())
+            combo_raster.setCurrentIndex(combo_raster.count() - 1)
+            iface.messageBar().pushMessage("Éxito",
+                                           "Foto recortada guardada y cargada en el proyecto.",
+                                           level=Qgis.MessageLevel.Success, duration=5)
+        else:
+            QMessageBox.warning(dialog, "Aviso",
+                                "El recorte se guardó, pero no se pudo cargar automáticamente:\n"
+                                + out_path)
 
     def on_usar_contorno_raster():
         rid = combo_raster.currentData()
@@ -1332,7 +1545,11 @@ def main_dialog(iface):
     def cleanup():
         if dialog.area_layer:
             QgsProject.instance().removeMapLayer(dialog.area_layer.id())
+        if dialog._crop_rubber:
+            dialog._crop_rubber.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
 
+    btn_dibujar_recorte.clicked.connect(on_dibujar_recorte)
+    btn_guardar_recorte.clicked.connect(on_guardar_recorte)
     btn_dibujar.clicked.connect(on_dibujar)
     btn_contorno_raster.clicked.connect(on_usar_contorno_raster)
     btn_borrar.clicked.connect(on_borrar_area)
