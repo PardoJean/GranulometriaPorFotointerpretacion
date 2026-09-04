@@ -41,7 +41,8 @@ from qgis.PyQt.QtWidgets import (
     QWidget, QFrame, QMenu, QDateEdit, QSpinBox, QScrollArea
 )
 from qgis.PyQt.QtGui import (
-    QIcon, QColor, QImage, QPainter, QFont, QFontMetrics, QPixmap, QTransform
+    QIcon, QColor, QImage, QPainter, QFont, QFontMetrics, QPixmap, QTransform,
+    QRegion, QBitmap
 )
 
 # ===========================================================================
@@ -890,6 +891,31 @@ def raster_footprint_geom(raster_layer, log_fn=None):
 # ETIQUETADO DE FOTO (fecha + texto + logo, foto de evidencia para el informe)
 # ===========================================================================
 
+def preparar_foto_etiqueta(img):
+    """Reemplaza por negro el relleno blanco puro de fondo (típico de las
+    ortofotos de Metashape fuera del área realmente fotografiada — no es
+    transparencia real: son píxeles (255,255,255) opacos ya horneados en la
+    foto, confirmado contra fotos reales del laboratorio) y rota la imagen a
+    horizontal si es vertical. La misma función se usa para la vista previa y
+    para el archivo final exportado, para que ambos coincidan.
+
+    Usa QImage.createMaskFromColor (nativo de Qt, en C++), no un bucle por
+    píxel en Python — tarda <0.1 s incluso en fotos de 15+ MP. Es un
+    reemplazo por color exacto: solo afecta relleno blanco puro y uniforme,
+    no zonas claras con textura/variación natural de una foto real.
+    """
+    out = img.convertToFormat(QImage.Format.Format_RGB32)
+    mask = out.createMaskFromColor(QColor(255, 255, 255).rgb(), Qt.MaskMode.MaskOutColor)
+    region = QRegion(QBitmap.fromImage(mask))
+    painter = QPainter(out)
+    painter.setClipRegion(region)
+    painter.fillRect(out.rect(), QColor("black"))
+    painter.end()
+    if out.height() > out.width():
+        out = out.transformed(QTransform().rotate(90))
+    return out
+
+
 def compose_watermark(qimage, date_text, extra_text, logo_path, font_px, logo_width_px):
     """Devuelve una copia de qimage con el texto libre apilado arriba de la
     fecha, ambos abajo-izquierda, y el logo (si hay) solo abajo-derecha. No
@@ -1705,12 +1731,10 @@ def main_dialog(iface):
         update_preview_etiqueta()
 
     def _ajustar_tamanos_por_defecto():
-        rlyr = _raster_etiqueta()
-        w = rlyr.width() if rlyr else 2000
         spin_font.blockSignals(True)
         spin_logo.blockSignals(True)
-        spin_font.setValue(max(10, min(80, w // 60)))
-        spin_logo.setValue(max(20, min(800, w // 6)))
+        spin_font.setValue(60)
+        spin_logo.setValue(800)
         spin_font.blockSignals(False)
         spin_logo.blockSignals(False)
 
@@ -1725,10 +1749,9 @@ def main_dialog(iface):
             lbl_preview_etiqueta.setPixmap(QPixmap())
             lbl_preview_etiqueta.setText("No se pudo leer la fotografía.")
             return
-        # Rotación solo visual: las fotos del laboratorio son verticales y
-        # desperdician el recuadro horizontal de la vista previa. El archivo
-        # que se guarda (on_guardar_etiqueta) usa siempre "img" sin rotar.
-        img_previa = img.transformed(QTransform().rotate(90)) if img.height() > img.width() else img
+        # Misma preparación (fondo negro + rotación) que on_guardar_etiqueta,
+        # para que la vista previa coincida exactamente con lo que se exporta.
+        img_previa = preparar_foto_etiqueta(img)
 
         box_w, box_h = 480, 260
         if img_previa.width() > box_w or img_previa.height() > box_h:
@@ -1761,6 +1784,7 @@ def main_dialog(iface):
         if img.isNull():
             QMessageBox.critical(dialog, "Error", "No se pudo leer la fotografía seleccionada.")
             return
+        img_final = preparar_foto_etiqueta(img)
 
         settings = QSettings()
         last_folder = settings.value("GranulometriaGFI/ultima_carpeta", "")
@@ -1776,7 +1800,7 @@ def main_dialog(iface):
             return
 
         resultado = compose_watermark(
-            img, date_edit.date().toString("yyyy-MM-dd"), txt_extra.text(),
+            img_final, date_edit.date().toString("yyyy-MM-dd"), txt_extra.text(),
             _logo_path(), spin_font.value(), spin_logo.value())
         if not resultado.save(out_path):
             QMessageBox.critical(dialog, "Error", "No se pudo guardar la imagen.")
