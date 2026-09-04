@@ -33,14 +33,14 @@ from qgis.core import (
     QgsVectorFileWriter, QgsCoordinateTransform, Qgis, QgsApplication
 )
 from qgis.gui import QgsMapToolEmitPoint, QgsRubberBand
-from qgis.PyQt.QtCore import QVariant, Qt, QSettings
+from qgis.PyQt.QtCore import QVariant, Qt, QSettings, QDate
 from qgis.PyQt.QtWidgets import (
     QAction, QComboBox, QDialog, QVBoxLayout, QLabel, QPushButton, QMessageBox,
     QFileDialog, QFormLayout, QHBoxLayout, QProgressBar, QGroupBox,
     QGridLayout, QLineEdit, QCheckBox, QDialogButtonBox, QPlainTextEdit, QTabWidget,
-    QWidget, QFrame, QMenu
+    QWidget, QFrame, QMenu, QDateEdit, QSpinBox
 )
-from qgis.PyQt.QtGui import QIcon, QColor
+from qgis.PyQt.QtGui import QIcon, QColor, QImage, QPainter, QFont, QFontMetrics, QPixmap
 
 # ===========================================================================
 # HOJA DE ESTILO ÚNICA (main_dialog, ExportDialog, show_about_dialog)
@@ -885,6 +885,45 @@ def raster_footprint_geom(raster_layer, log_fn=None):
 
 
 # ===========================================================================
+# ETIQUETADO DE FOTO (fecha + texto + logo, foto de evidencia para el informe)
+# ===========================================================================
+
+def compose_watermark(qimage, date_text, extra_text, logo_path, font_px, logo_width_px):
+    """Devuelve una copia de qimage con la fecha pegada abajo-izquierda y,
+    abajo-derecha, el logo (si hay) apilado encima del texto libre. No
+    modifica qimage. Fuente Arial blanca, igual para fecha y texto.
+    """
+    out = QImage(qimage)
+    painter = QPainter(out)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    margin = max(8, out.width() // 100)
+    font = QFont("Arial")
+    font.setPixelSize(max(1, font_px))
+    painter.setFont(font)
+    painter.setPen(QColor("white"))
+    fm = QFontMetrics(font)
+
+    if date_text:
+        painter.drawText(margin, out.height() - margin, date_text)
+
+    y_bottom_right = out.height() - margin
+    if logo_path and os.path.exists(logo_path):
+        logo = QImage(logo_path)
+        if not logo.isNull() and logo_width_px > 0:
+            logo = logo.scaledToWidth(logo_width_px, Qt.TransformationMode.SmoothTransformation)
+            x_logo = out.width() - margin - logo.width()
+            y_logo = y_bottom_right - logo.height() - (fm.height() if extra_text else 0)
+            painter.drawImage(x_logo, y_logo, logo)
+
+    if extra_text:
+        w = fm.horizontalAdvance(extra_text)
+        painter.drawText(out.width() - margin - w, y_bottom_right, extra_text)
+
+    painter.end()
+    return out
+
+
+# ===========================================================================
 # DIÁLOGOS
 # ===========================================================================
 
@@ -1001,7 +1040,7 @@ def parse_inches(value_str):
     return float(value_str)
 
 
-PLUGIN_VERSION = "1.3.0"
+PLUGIN_VERSION = "1.0.2"
 PLUGIN_FECHA = "2026-09-04"
 
 ACERCA_DE_QUE_HACE = (
@@ -1019,27 +1058,26 @@ ACERCA_DE_QUE_HACE = (
 )
 
 ACERCA_DE_NOVEDADES = (
-    "Versión 1.3.0:\n"
-    "  • El recorte ahora se dibuja con las herramientas reales de "
-    "digitalización de QGIS: «Por segmento», «Por flujo» y «Por forma: "
-    "Rectángulo», elegibles desde el botón «Dibujar Recorte».\n"
-    "  • Íconos de «Guardar y Exportar…» y «Exportar Todo» iguales a los de "
-    "QGIS (guardar / guardar como).\n\n"
-    "Versión 1.2.0:\n"
-    "  • El recorte se puede dibujar de dos formas: manual (clic por clic) o a "
-    "mano alzada (arrastrando el mouse). Se elige desde el propio botón "
-    "«Dibujar Recorte».\n"
-    "  • Escape reinicia el trazo en curso (recorte o contorno de área total) "
-    "sin salir de la herramienta de dibujo.\n"
-    "  • «Procesar Capa» y «Exportar Todo» ahora solo se muestran en la "
-    "pestaña «Analizar».\n"
-    "  • El recorte anterior desaparece del lienzo al empezar a dibujar uno "
-    "nuevo.\n\n"
-    "Versión 1.1.0:\n"
-    "  • Recorte de la fotografía dentro del plugin, con un polígono de forma "
-    "libre y sin pérdida de calidad (misma resolución, compresión LZW).\n"
-    "  • Interfaz reorganizada en dos pestañas: «Preparar Foto» y «Analizar».\n"
-    "  • Foco de teclado visible en todos los controles y mejor contraste.\n\n"
+    "Versión 1.0.2:\n"
+    "  • Nuevo paso opcional «Preparar Foto»: recortar la fotografía con un "
+    "polígono de forma libre (sin pérdida de calidad) antes de analizarla, con "
+    "tres formas de dibujar el contorno: «Por segmento», «Por flujo» y «Por "
+    "forma: Rectángulo».\n"
+    "  • El área total ahora usa la huella real de píxeles de la foto (no el "
+    "rectángulo envolvente), que en fotos con borde transparente sobreestimaba "
+    "el área hasta en un 39 %.\n"
+    "  • El contorno de área total se puede dibujar con los mismos tres modos "
+    "que el recorte, y el grupo «Área Total» ahora muestra y permite elegir "
+    "sobre qué foto se está trabajando.\n"
+    "  • Interfaz reorganizada en pestañas («Preparar Foto», «Analizar», "
+    "«Etiquetar Foto»), con apariencia nativa de QGIS (tema y fuente heredados, "
+    "íconos del propio QGIS en vez de emojis) y foco de teclado visible.\n"
+    "  • Nueva pestaña «Etiquetar Foto»: pega sobre la fotografía la fecha "
+    "(calendario, formato AAAA-MM-DD, abajo-izquierda), un texto libre y un "
+    "logo propio (recordado de forma privada) abajo-derecha, y la exporta como "
+    "imagen aparte para el informe.\n"
+    "  • «Procesar Capa» ya no abre la tabla de atributos ni deja la capa "
+    "temporal del área total en el panel tras exportar.\n\n"
     "Versión 1.0.1:\n"
     "  • Compatibilidad con Qt6 (enums calificados, imports vía qgis.PyQt).\n\n"
     "Versión 1.0.0:\n"
@@ -1204,13 +1242,17 @@ def main_dialog(iface):
     dialog._params = None
     dialog._crop_geom = None
 
-    crs = QgsProject.instance().crs().authid()
-    dialog.area_layer = QgsVectorLayer(f"Polygon?crs={crs}", "Área Total (Temporal)", "memory")
-    QgsProject.instance().addMapLayer(dialog.area_layer)
-    symbol = QgsFillSymbol.createSimple(
-        {'color': '0,115,230,40', 'outline_color': '#0073e6', 'outline_width': '0.6'}
-    )
-    dialog.area_layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+    def _crear_area_layer():
+        crs = QgsProject.instance().crs().authid()
+        lyr = QgsVectorLayer(f"Polygon?crs={crs}", "Área Total (Temporal)", "memory")
+        QgsProject.instance().addMapLayer(lyr)
+        symbol = QgsFillSymbol.createSimple(
+            {'color': '0,115,230,40', 'outline_color': '#0073e6', 'outline_width': '0.6'}
+        )
+        lyr.setRenderer(QgsSingleSymbolRenderer(symbol))
+        return lyr
+
+    dialog.area_layer = _crear_area_layer()
     dialog.map_tool = None
 
     # Contorno del recorte, visible sobre el lienzo mientras el diálogo vive
@@ -1252,6 +1294,14 @@ def main_dialog(iface):
     grp_area = QGroupBox("2. Área Total (Contorno de la Foto)")
     lay_area = QVBoxLayout(grp_area)
     lay_area.setSpacing(8)
+    # Espejo del selector de foto (combo_raster, en "Preparar Foto"): sin esto
+    # no se ve desde esta pestaña sobre qué foto van a actuar estos botones.
+    form_foto_area = QFormLayout()
+    combo_raster_area = QComboBox()
+    for r in get_raster_layers():
+        combo_raster_area.addItem(r.name(), r.id())
+    form_foto_area.addRow("Fotografía:", combo_raster_area)
+    lay_area.addLayout(form_foto_area)
     hbtn = QHBoxLayout()
     btn_contorno_raster = QPushButton(QgsApplication.getThemeIcon("mActionAddRasterLayer.svg"),
                                       "Usar Contorno del Ráster")
@@ -1324,6 +1374,65 @@ def main_dialog(iface):
     lay_info.addRow("Tamaño de imagen:", lbl_mp)
     lay_info.addRow("Tamaño de píxel (m):", lbl_pixel)
 
+    # --- Grupo: Etiquetar foto (fecha + texto + logo, para el informe) ---
+    grp_etiqueta = QGroupBox("Etiquetar Foto")
+    lay_etiqueta = QVBoxLayout(grp_etiqueta)
+    lay_etiqueta.setSpacing(8)
+
+    form_etiqueta = QFormLayout()
+    form_etiqueta.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
+    combo_raster_etiqueta = QComboBox()
+    for r in get_raster_layers():
+        combo_raster_etiqueta.addItem(r.name(), r.id())
+    form_etiqueta.addRow("Fotografía:", combo_raster_etiqueta)
+
+    date_edit = QDateEdit()
+    date_edit.setCalendarPopup(True)
+    date_edit.setDisplayFormat("yyyy-MM-dd")
+    date_edit.setDate(QDate.currentDate())
+    form_etiqueta.addRow("Fecha (abajo-izq.):", date_edit)
+
+    txt_extra = QLineEdit()
+    txt_extra.setPlaceholderText("Texto libre (abajo-der.), p. ej. sitio o técnico")
+    form_etiqueta.addRow("Texto (abajo-der.):", txt_extra)
+    lay_etiqueta.addLayout(form_etiqueta)
+
+    h_logo = QHBoxLayout()
+    btn_logo = QPushButton(QgsApplication.getThemeIcon("mActionAddRasterLayer.svg"), "Cargar Logo…")
+    lbl_logo_preview = QLabel("Sin logo")
+    lbl_logo_preview.setFixedSize(48, 48)
+    lbl_logo_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    lbl_logo_preview.setStyleSheet("border: 1px solid #999999;")
+    h_logo.addWidget(btn_logo)
+    h_logo.addWidget(lbl_logo_preview)
+    h_logo.addStretch()
+    lay_etiqueta.addLayout(h_logo)
+
+    h_tam = QHBoxLayout()
+    spin_font = QSpinBox()
+    spin_font.setRange(10, 80)
+    spin_font.setSuffix(" px")
+    spin_logo = QSpinBox()
+    spin_logo.setRange(20, 800)
+    spin_logo.setSuffix(" px")
+    h_tam.addWidget(QLabel("Tamaño de texto:"))
+    h_tam.addWidget(spin_font)
+    h_tam.addSpacing(12)
+    h_tam.addWidget(QLabel("Ancho del logo:"))
+    h_tam.addWidget(spin_logo)
+    h_tam.addStretch()
+    lay_etiqueta.addLayout(h_tam)
+
+    lbl_preview_etiqueta = QLabel("Selecciona una fotografía para ver la vista previa.")
+    lbl_preview_etiqueta.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    lbl_preview_etiqueta.setMinimumHeight(260)
+    lbl_preview_etiqueta.setStyleSheet("border: 1px solid #999999;")
+    lay_etiqueta.addWidget(lbl_preview_etiqueta)
+
+    btn_guardar_etiqueta = QPushButton(QgsApplication.getThemeIcon("mActionFileSaveAs.svg"),
+                                       "Guardar Imagen…")
+    lay_etiqueta.addWidget(btn_guardar_etiqueta)
+
     # --- Pestañas: primero se prepara la foto, después se analiza ---
     tab_preparar = QWidget()
     lay_preparar = QVBoxLayout(tab_preparar)
@@ -1344,9 +1453,14 @@ def main_dialog(iface):
     lay_analizar.addWidget(grp_params)
     lay_analizar.addStretch()
 
+    tab_etiqueta = QWidget()
+    lay_tab_etiqueta = QVBoxLayout(tab_etiqueta)
+    lay_tab_etiqueta.addWidget(grp_etiqueta)
+
     tabs = QTabWidget()
     tabs.addTab(tab_preparar, "Preparar Foto")
     tabs.addTab(tab_analizar, "Analizar")
+    tabs.addTab(tab_etiqueta, "Etiquetar Foto")
     layout.addWidget(tabs)
 
     # --- Barra de progreso ---
@@ -1408,6 +1522,13 @@ def main_dialog(iface):
         lbl_pixel.setText(f"{rlyr.rasterUnitsPerPixelX():.5f}")
 
     combo_raster.currentIndexChanged.connect(update_image_info)
+    # Sincronización bidireccional con el combo espejo del grupo 2: al ser el
+    # mismo índice, Qt no vuelve a emitir la señal, así que no hace falta
+    # blockSignals ni riesgo de bucle infinito.
+    combo_raster.currentIndexChanged.connect(combo_raster_area.setCurrentIndex)
+    combo_raster_area.currentIndexChanged.connect(combo_raster.setCurrentIndex)
+    combo_raster.currentIndexChanged.connect(combo_raster_etiqueta.setCurrentIndex)
+    combo_raster_etiqueta.currentIndexChanged.connect(combo_raster.setCurrentIndex)
     update_image_info()
 
     # ---- Parsear umbral ----
@@ -1417,6 +1538,8 @@ def main_dialog(iface):
 
     # ---- Área total: helpers ----
     def set_area_geom(geom):
+        if dialog.area_layer is None:
+            dialog.area_layer = _crear_area_layer()
         dialog.area_layer.dataProvider().truncate()
         feat = QgsFeature(dialog.area_layer.fields())
         feat.setGeometry(geom)
@@ -1512,6 +1635,8 @@ def main_dialog(iface):
         if nueva.isValid():
             QgsProject.instance().addMapLayer(nueva)
             combo_raster.addItem(nueva.name(), nueva.id())
+            combo_raster_area.addItem(nueva.name(), nueva.id())
+            combo_raster_etiqueta.addItem(nueva.name(), nueva.id())
             combo_raster.setCurrentIndex(combo_raster.count() - 1)
             iface.messageBar().pushMessage("Éxito",
                                            "Foto recortada guardada y cargada en el proyecto.",
@@ -1520,6 +1645,111 @@ def main_dialog(iface):
             QMessageBox.warning(dialog, "Aviso",
                                 "El recorte se guardó, pero no se pudo cargar automáticamente:\n"
                                 + out_path)
+
+    # ---- Etiquetar foto (fecha + texto + logo, para el informe) ----
+    def _raster_etiqueta():
+        rid = combo_raster_etiqueta.currentData()
+        return QgsProject.instance().mapLayer(rid) if rid else None
+
+    def _logo_path():
+        return QSettings().value("GranulometriaGFI/logo_path", "")
+
+    def _mostrar_logo_preview(path):
+        if path and os.path.exists(path):
+            pix = QPixmap(path)
+            if not pix.isNull():
+                lbl_logo_preview.setPixmap(
+                    pix.scaled(46, 46, Qt.AspectRatioMode.KeepAspectRatio,
+                              Qt.TransformationMode.SmoothTransformation))
+                return
+        lbl_logo_preview.setPixmap(QPixmap())
+        lbl_logo_preview.setText("Sin logo")
+
+    def on_cargar_logo():
+        settings = QSettings()
+        last = settings.value("GranulometriaGFI/logo_path", "")
+        path, _ = QFileDialog.getOpenFileName(
+            dialog, "Cargar logo", os.path.dirname(last) if last else "",
+            "Imágenes (*.png *.jpg *.jpeg)")
+        if not path:
+            return
+        settings.setValue("GranulometriaGFI/logo_path", path)
+        _mostrar_logo_preview(path)
+        update_preview_etiqueta()
+
+    def _ajustar_tamanos_por_defecto():
+        rlyr = _raster_etiqueta()
+        w = rlyr.width() if rlyr else 2000
+        spin_font.blockSignals(True)
+        spin_logo.blockSignals(True)
+        spin_font.setValue(max(10, min(80, w // 60)))
+        spin_logo.setValue(max(20, min(800, w // 6)))
+        spin_font.blockSignals(False)
+        spin_logo.blockSignals(False)
+
+    def update_preview_etiqueta():
+        rlyr = _raster_etiqueta()
+        if rlyr is None:
+            lbl_preview_etiqueta.setPixmap(QPixmap())
+            lbl_preview_etiqueta.setText("Selecciona una fotografía para ver la vista previa.")
+            return
+        img = QImage(rlyr.source().split('|')[0])
+        if img.isNull():
+            lbl_preview_etiqueta.setPixmap(QPixmap())
+            lbl_preview_etiqueta.setText("No se pudo leer la fotografía.")
+            return
+        box_w, box_h = 480, 260
+        if img.width() > box_w or img.height() > box_h:
+            small = img.scaled(box_w, box_h, Qt.AspectRatioMode.KeepAspectRatio,
+                               Qt.TransformationMode.SmoothTransformation)
+        else:
+            small = img
+        # Los tamaños de fuente/logo están en píxeles de la imagen real; se
+        # escalan por el mismo factor que la miniatura para que la vista
+        # previa coincida visualmente con lo que sale al exportar en tamaño
+        # completo.
+        factor = small.width() / img.width()
+        composed = compose_watermark(
+            small, date_edit.date().toString("yyyy-MM-dd"), txt_extra.text(),
+            _logo_path(), max(1, round(spin_font.value() * factor)),
+            max(1, round(spin_logo.value() * factor)))
+        lbl_preview_etiqueta.setText("")
+        lbl_preview_etiqueta.setPixmap(QPixmap.fromImage(composed))
+
+    def on_raster_etiqueta_changed():
+        _ajustar_tamanos_por_defecto()
+        update_preview_etiqueta()
+
+    def on_guardar_etiqueta():
+        rlyr = _raster_etiqueta()
+        if rlyr is None:
+            QMessageBox.warning(dialog, "Advertencia", "Selecciona primero una fotografía.")
+            return
+        img = QImage(rlyr.source().split('|')[0])
+        if img.isNull():
+            QMessageBox.critical(dialog, "Error", "No se pudo leer la fotografía seleccionada.")
+            return
+
+        settings = QSettings()
+        last_folder = settings.value("GranulometriaGFI/ultima_carpeta", "")
+        default_name = f"{rlyr.name()}_etiquetada.png"
+        default_path = os.path.join(last_folder, default_name) if last_folder else default_name
+        out_path, _ = QFileDialog.getSaveFileName(
+            dialog, "Guardar foto etiquetada", default_path, "PNG (*.png);;JPEG (*.jpg)"
+        )
+        if not out_path:
+            return
+
+        resultado = compose_watermark(
+            img, date_edit.date().toString("yyyy-MM-dd"), txt_extra.text(),
+            _logo_path(), spin_font.value(), spin_logo.value())
+        if not resultado.save(out_path):
+            QMessageBox.critical(dialog, "Error", "No se pudo guardar la imagen.")
+            return
+
+        settings.setValue("GranulometriaGFI/ultima_carpeta", os.path.dirname(out_path))
+        iface.messageBar().pushMessage("Éxito", "Foto etiquetada guardada.",
+                                       level=Qgis.MessageLevel.Success, duration=5)
 
     def on_usar_contorno_raster():
         rid = combo_raster.currentData()
@@ -1562,12 +1792,16 @@ def main_dialog(iface):
         iface.mapCanvas().refresh()
 
     def on_borrar_area():
+        if dialog.area_layer is None:
+            return
         dialog.area_layer.dataProvider().truncate()
         dialog.area_layer.updateExtents()
         iface.mapCanvas().refresh()
         lbl_area_total.setText("Área total: — (genera o dibuja el contorno)")
 
     def get_area_total_geom():
+        if dialog.area_layer is None:
+            return None
         feats = list(dialog.area_layer.getFeatures())
         if not feats:
             return None
@@ -1676,6 +1910,16 @@ def main_dialog(iface):
                 QMessageBox.warning(dialog, "Aviso del GeoPackage", "\n".join(problemas))
 
         if generated:
+            # La capa "Área Total (Temporal)" ya cumplió su función (el área
+            # quedó grabada en los reportes); se quita del panel de capas. Si
+            # el usuario dibuja/genera un contorno de nuevo, se recrea sola
+            # (ver set_area_geom).
+            if dialog.area_layer:
+                QgsProject.instance().removeMapLayer(dialog.area_layer.id())
+                dialog.area_layer = None
+                iface.mapCanvas().refresh()
+                lbl_area_total.setText("Área total: — (genera o dibuja el contorno)")
+
             resumen_gpkg = ("\n\n" + "\n".join(gpkg_log)) if gpkg_log else ""
             QMessageBox.information(dialog, "Exportación completa",
                                     "✅ Archivos guardados en:\n" + folder + "\n\n" +
@@ -1710,6 +1954,18 @@ def main_dialog(iface):
     btn_acerca_de.clicked.connect(lambda: show_about_dialog(dialog))
     tabs.currentChanged.connect(on_tab_changed)
     on_tab_changed(tabs.currentIndex())
+
+    btn_logo.clicked.connect(on_cargar_logo)
+    btn_guardar_etiqueta.clicked.connect(on_guardar_etiqueta)
+    combo_raster_etiqueta.currentIndexChanged.connect(on_raster_etiqueta_changed)
+    date_edit.dateChanged.connect(update_preview_etiqueta)
+    txt_extra.textChanged.connect(update_preview_etiqueta)
+    spin_font.valueChanged.connect(update_preview_etiqueta)
+    spin_logo.valueChanged.connect(update_preview_etiqueta)
+    _mostrar_logo_preview(_logo_path())
+    _ajustar_tamanos_por_defecto()
+    update_preview_etiqueta()
+
     dialog.finished.connect(cleanup)
     dialog.exec()
 
