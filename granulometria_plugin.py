@@ -32,10 +32,7 @@ from qgis.core import (
     QgsSingleSymbolRenderer, QgsFillSymbol, QgsRasterLayer,
     QgsVectorFileWriter, QgsCoordinateTransform, Qgis, QgsApplication
 )
-from qgis.gui import (
-    QgsMapToolEmitPoint, QgsRubberBand, QgsMapToolDigitizeFeature,
-    QgsMapToolCapture, QgsMapToolExtent
-)
+from qgis.gui import QgsMapToolEmitPoint, QgsRubberBand
 from qgis.PyQt.QtCore import QVariant, Qt, QSettings
 from qgis.PyQt.QtWidgets import (
     QAction, QComboBox, QDialog, QVBoxLayout, QLabel, QPushButton, QMessageBox,
@@ -48,43 +45,11 @@ from qgis.PyQt.QtGui import QIcon, QColor
 # ===========================================================================
 # HOJA DE ESTILO ÚNICA (main_dialog, ExportDialog, show_about_dialog)
 # ===========================================================================
+# ponytail: sin colores/fuente propios — el diálogo hereda la paleta y fuente
+# de QGIS (funciona igual en tema claro y oscuro). Solo se centra el título
+# de los QGroupBox, que por defecto en Qt sale pegado a la izquierda.
 DIALOG_STYLE = """
-QDialog { background-color: #f7f7f7; font-family: 'Segoe UI', Arial, sans-serif; }
-QGroupBox { background-color: #ffffff; border: 1px solid #dddddd;
-            border-radius: 8px; margin-top: 16px; padding: 14px 10px 10px 10px;
-            font-weight: bold; color: #333333; }
-QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left;
-                   left: 8px; padding: 0 4px; background: transparent; }
-QLabel { color: #444444; font-size: 10pt; }
-QPushButton { background-color: #f0f0f0; color: #333333; border: 1px solid #cccccc;
-              border-radius: 4px; padding: 6px 12px; font-size: 10pt; font-weight: bold; }
-QPushButton:hover { background-color: #e0e0e0; border-color: #aaaaaa; }
-QPushButton:pressed { background-color: #d0d0d0; }
-QPushButton:focus { border: 2px solid #0073e6; padding: 5px 11px; }
-QPushButton#primary_button { background-color: #0073e6; color: white; border: 1px solid #0073e6; }
-QPushButton#primary_button:hover { background-color: #005cb8; }
-QPushButton#primary_button:pressed { background-color: #004c99; }
-QPushButton#primary_button:focus { border: 2px solid #1a4a7a; padding: 5px 11px; }
-QPushButton:disabled { background-color: #e8e8e8; color: #aaaaaa; border-color: #dddddd; }
-QComboBox, QListWidget, QLineEdit, QPlainTextEdit {
-    background-color: white; border: 1px solid #cccccc;
-    border-radius: 4px; padding: 4px; font-size: 10pt; color: #333333;
-}
-QComboBox:focus, QLineEdit:focus, QPlainTextEdit:focus { border: 2px solid #0073e6; }
-QComboBox:disabled, QLineEdit:disabled { background-color: #eeeeee; color: #aaaaaa; }
-QCheckBox { color: #444444; font-size: 10pt; }
-QProgressBar { border: 1px solid #cccccc; border-radius: 4px; text-align: center; color: #333333; }
-QProgressBar::chunk { background-color: #0073e6; border-radius: 3px; }
-QTabWidget::pane { border: 1px solid #dddddd; border-radius: 6px; background: #ffffff; top: -1px; }
-QTabBar::tab {
-    background: #f0f0f0; color: #555555; border: 1px solid #dddddd; border-bottom: none;
-    border-top-left-radius: 6px; border-top-right-radius: 6px;
-    min-width: 120px; height: 24px; padding: 6px 4px;
-    font-weight: bold; font-size: 10pt; margin-right: 2px;
-}
-QTabBar::tab:selected { background: #ffffff; color: #1a4a7a; border-bottom: 3px solid #0073e6; }
-QTabBar::tab:hover:!selected { background: #e6e6e6; }
-QTabBar::tab:focus { border: 2px solid #0073e6; }
+QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top center; padding: 0 4px; }
 """
 
 # ===========================================================================
@@ -107,34 +72,98 @@ TAMICES_STD = [
 # ===========================================================================
 
 class PolygonMapTool(QgsMapToolEmitPoint):
-    def __init__(self, iface, on_polygon_drawn):
+    """Herramienta de dibujo propia (QgsRubberBand), con los tres modos y
+    nombres de QGIS pero sin tocar su maquinaria real de digitalización —
+    QgsMapToolDigitizeFeature exige una capa en edición y crashea (access
+    violation en QgsMapCanvas::setCurrentLayer) al desactivarse sobre una
+    capa temporal que nunca se agregó al proyecto; esto no puede crashear
+    porque no usa esa clase.
+
+    modo: "segmento" (clic por vértice, clic derecho cierra),
+          "flujo" (mantener presionado y mover, suelta para cerrar),
+          "rectangulo" (dos clics, esquina y esquina opuesta).
+    """
+    def __init__(self, iface, on_polygon_drawn, on_cancel=None, modo="segmento"):
         super().__init__(iface.mapCanvas())
         self.iface = iface
         self.canvas = iface.mapCanvas()
         self.on_polygon_drawn = on_polygon_drawn
+        self.on_cancel = on_cancel
+        self.modo = modo
         self.points = []
+        self._streaming = False
         self.rubber_band = QgsRubberBand(self.canvas, QgsWkbTypes.GeometryType.PolygonGeometry)
         self.rubber_band.setColor(QColor(255, 0, 0, 100))
         self.rubber_band.setWidth(2)
 
     def canvasPressEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton:
-            self.points.append(self.toMapCoordinates(e.pos()))
+        if e.button() != Qt.MouseButton.LeftButton:
+            if e.button() == Qt.MouseButton.RightButton:
+                self.finalize_polygon()
+            return
+        pt = self.toMapCoordinates(e.pos())
+        if self.modo == "flujo":
+            self._streaming = True
+            self.points = [pt]
+            self._last_device_pos = e.pos()
+        elif self.modo == "rectangulo":
+            if len(self.points) < 1:
+                self.points = [pt]
+            else:
+                self.points = self._rect_points(self.points[0], pt)
+                self.finalize_polygon()
+        else:  # segmento
+            self.points.append(pt)
             self.update_rubber_band()
-        elif e.button() == Qt.MouseButton.RightButton:
-            self.finalize_polygon()
 
     def canvasMoveEvent(self, e):
-        if self.points:
+        if self.modo == "flujo" and self._streaming:
+            # Umbral de 4 px de pantalla entre vértices: evita miles de
+            # puntos redundantes al arrastrar el mouse.
+            last = getattr(self, "_last_device_pos", None)
+            if last is not None:
+                dx = e.pos().x() - last.x()
+                dy = e.pos().y() - last.y()
+                if dx * dx + dy * dy < 16:
+                    return
+            self._last_device_pos = e.pos()
+            self.points.append(self.toMapCoordinates(e.pos()))
+            self.update_rubber_band()
+        elif self.modo == "rectangulo" and len(self.points) == 1:
+            rect_pts = self._rect_points(self.points[0], self.toMapCoordinates(e.pos()))
+            self.update_rubber_band(rect_pts=rect_pts)
+        elif self.points:
             self.update_rubber_band(self.toMapCoordinates(e.pos()))
+
+    def canvasReleaseEvent(self, e):
+        if self.modo == "flujo" and self._streaming and e.button() == Qt.MouseButton.LeftButton:
+            self._streaming = False
+            self.finalize_polygon()
 
     def keyPressEvent(self, e):
         if e.key() == Qt.Key.Key_Escape:
-            self.points = []
-            self.rubber_band.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
+            if self.points:
+                # Había un trazo en curso: solo se borra, la herramienta sigue activa.
+                self.points = []
+                self._streaming = False
+                self.rubber_band.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
+            else:
+                # Nada que borrar: cancela y devuelve el control al diálogo.
+                cb = self.on_cancel
+                self.iface.mapCanvas().unsetMapTool(self)
+                if cb:
+                    cb()
+        elif e.key() == Qt.Key.Key_Backspace and self.modo == "segmento" and self.points:
+            self.points.pop()
+            self.update_rubber_band()
 
-    def update_rubber_band(self, temporary_point=None):
-        pts = list(self.points)
+    def _rect_points(self, p1, p2):
+        from qgis.core import QgsPointXY
+        return [QgsPointXY(p1.x(), p1.y()), QgsPointXY(p2.x(), p1.y()),
+                QgsPointXY(p2.x(), p2.y()), QgsPointXY(p1.x(), p2.y())]
+
+    def update_rubber_band(self, temporary_point=None, rect_pts=None):
+        pts = rect_pts if rect_pts is not None else list(self.points)
         if temporary_point:
             pts.append(temporary_point)
         if len(pts) > 1:
@@ -799,6 +828,62 @@ def crop_raster_by_polygon(raster_layer, geom, out_path, log_fn=None):
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+def raster_footprint_geom(raster_layer, log_fn=None):
+    """Polígono de los píxeles con datos del ráster (su huella real), no el
+    rectángulo envolvente que da QgsRasterLayer.extent(). Las ortofotos de
+    Metashape traen borde transparente/nodata fuera del área realmente
+    fotografiada, así que el bbox sobreestima el área total (~13-39% medido
+    contra fotos reales del laboratorio) y desalinea el % grueso/fino.
+
+    Devuelve una QgsGeometry en el CRS del ráster, o None si no se pudo
+    calcular (el llamador debe caer al extent() de siempre en ese caso).
+    """
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    try:
+        from osgeo import gdal, ogr
+        gdal.UseExceptions()
+
+        src_path = raster_layer.source().split('|')[0]
+        ds = gdal.Open(src_path)
+        if ds is None:
+            log("✘ No se pudo abrir el ráster con GDAL para calcular su huella.")
+            return None
+
+        band = ds.GetRasterBand(1)
+        if band.GetMaskFlags() & gdal.GMF_ALL_VALID:
+            # Sin alfa/nodata: no hay borde transparente, el bbox ya es la huella.
+            return None
+
+        mem = ogr.GetDriverByName("Memory").CreateDataSource("footprint")
+        lyr = mem.CreateLayer("f", geom_type=ogr.wkbPolygon)
+        lyr.CreateField(ogr.FieldDefn("v", ogr.OFTInteger))
+        gdal.Polygonize(band.GetMaskBand(), band.GetMaskBand(), lyr, 0)
+
+        union = None
+        for feat in lyr:
+            if feat.GetField("v") == 0:
+                continue
+            g = feat.GetGeometryRef()
+            union = g.Clone() if union is None else union.Union(g)
+        if union is None or union.GetArea() <= 0:
+            log("✘ La huella calculada del ráster está vacía.")
+            return None
+
+        geom = QgsGeometry.fromWkt(union.ExportToWkt())
+        if geom.constGet().nCoordinates() > 20000:
+            px = raster_layer.rasterUnitsPerPixelX()
+            geom = geom.simplify(px / 2)
+            log(f"ℹ Huella simplificada por tener muchos vértices "
+                f"(tolerancia {px / 2:.5f} m).")
+        return geom
+    except Exception as e:
+        log(f"✘ Error al calcular la huella real del ráster: {e}")
+        return None
+
+
 # ===========================================================================
 # DIÁLOGOS
 # ===========================================================================
@@ -808,14 +893,7 @@ def show_results_dialog(resumen, params, umbral_pulgadas):
     dlg = QDialog()
     dlg.setWindowTitle("Resultados del Análisis Granulométrico")
     dlg.setMinimumWidth(440)
-    dlg.setStyleSheet("""
-        QDialog { background-color: #f7f7f7; font-family: Arial; }
-        QGroupBox { background: white; border: 1px solid #ddd; border-radius: 6px;
-                    margin-top: 1ex; font-weight: bold; color: #333; }
-        QGroupBox::title { subcontrol-origin: margin; padding: 0 8px; margin-left: 8px;
-                           background: #f7f7f7; }
-        QLabel { color: #444; font-size: 10pt; }
-    """)
+    dlg.setStyleSheet(DIALOG_STYLE)
 
     layout = QVBoxLayout(dlg)
     layout.setSpacing(10)
@@ -829,7 +907,7 @@ def show_results_dialog(resumen, params, umbral_pulgadas):
         layout.addWidget(warn)
 
     # --- Resumen de áreas ---
-    grp0 = QGroupBox("📐 Áreas")
+    grp0 = QGroupBox("Áreas")
     g0 = QGridLayout(grp0)
     g0.setVerticalSpacing(4)
     area_data = [
@@ -838,15 +916,15 @@ def show_results_dialog(resumen, params, umbral_pulgadas):
         ("Área material fino:", f"{resumen['area_finos']:.4f} m²  ({resumen['pct_finos']:.2f} %)"),
     ]
     for i, (k, v) in enumerate(area_data):
-        lbl_k = QLabel(k); lbl_k.setStyleSheet("font-weight: bold; color: #555;")
-        lbl_v = QLabel(v); lbl_v.setStyleSheet("color: #0073e6; font-weight: bold;")
+        lbl_k = QLabel(k); lbl_k.setStyleSheet("font-weight: bold;")
+        lbl_v = QLabel(v); lbl_v.setStyleSheet("font-weight: bold;")
         lbl_v.setAlignment(Qt.AlignmentFlag.AlignRight)
         g0.addWidget(lbl_k, i, 0)
         g0.addWidget(lbl_v, i, 1)
     layout.addWidget(grp0)
 
     # --- Resumen procesamiento ---
-    grp1 = QGroupBox("📊 Resumen de Procesamiento")
+    grp1 = QGroupBox("Resumen de Procesamiento")
     g1 = QGridLayout(grp1)
     g1.setVerticalSpacing(4)
     proc_data = [
@@ -856,15 +934,15 @@ def show_results_dialog(resumen, params, umbral_pulgadas):
         ("Polígonos irregulares:", str(resumen['irregulares'])),
     ]
     for i, (k, v) in enumerate(proc_data):
-        lbl_k = QLabel(k); lbl_k.setStyleSheet("font-weight: bold; color: #555;")
-        lbl_v = QLabel(v); lbl_v.setStyleSheet("color: #0073e6; font-weight: bold;")
+        lbl_k = QLabel(k); lbl_k.setStyleSheet("font-weight: bold;")
+        lbl_v = QLabel(v); lbl_v.setStyleSheet("font-weight: bold;")
         lbl_v.setAlignment(Qt.AlignmentFlag.AlignRight)
         g1.addWidget(lbl_k, i, 0)
         g1.addWidget(lbl_v, i, 1)
     layout.addWidget(grp1)
 
     # --- Parámetros geotécnicos (solo en pantalla) ---
-    grp2 = QGroupBox("📈 Parámetros Granulométricos")
+    grp2 = QGroupBox("Parámetros Granulométricos")
     g2 = QGridLayout(grp2)
     g2.setVerticalSpacing(4)
 
@@ -880,10 +958,15 @@ def show_results_dialog(resumen, params, umbral_pulgadas):
         ("Clasificación SUCS:", params.get('sucs', '—')),
     ]
     for i, (k, v) in enumerate(geo_data):
-        lk = QLabel(k); lk.setStyleSheet("font-weight: bold; color: #555;")
+        lk = QLabel(k); lk.setStyleSheet("font-weight: bold;")
         lv = QLabel(v)
-        color = "#27ae60" if "GW" in v else ("#e74c3c" if "GP" in v else "#0073e6")
-        lv.setStyleSheet(f"color: {color}; font-weight: bold;")
+        # Color semántico de la clasificación SUCS (bien/mal graduado), se conserva.
+        if "GW" in v:
+            lv.setStyleSheet("color: #27ae60; font-weight: bold;")
+        elif "GP" in v:
+            lv.setStyleSheet("color: #e74c3c; font-weight: bold;")
+        else:
+            lv.setStyleSheet("font-weight: bold;")
         lv.setAlignment(Qt.AlignmentFlag.AlignRight)
         g2.addWidget(lk, i, 0)
         g2.addWidget(lv, i, 1)
@@ -891,8 +974,6 @@ def show_results_dialog(resumen, params, umbral_pulgadas):
 
     btn = QPushButton("Aceptar")
     btn.setObjectName("primary_button")
-    btn.setStyleSheet("background:#0073e6; color:white; border-radius:4px; "
-                      "padding:7px 20px; font-weight:bold; font-size:10pt;")
     btn.clicked.connect(dlg.accept)
     h = QHBoxLayout(); h.addStretch(); h.addWidget(btn); layout.addLayout(h)
 
@@ -976,7 +1057,7 @@ def show_about_dialog(parent=None):
     layout.setContentsMargins(14, 14, 14, 14)
 
     title = QLabel("Análisis Granulométrico por Fotointerpretación")
-    title.setStyleSheet("font-size: 12pt; font-weight: bold; color: #1a4a7a;")
+    title.setStyleSheet("font-size: 12pt; font-weight: bold;")
     title.setAlignment(Qt.AlignmentFlag.AlignCenter)
     layout.addWidget(title)
 
@@ -995,13 +1076,12 @@ def show_about_dialog(parent=None):
     layout.addWidget(grp2)
 
     lbl_meta = QLabel(f"Versión {PLUGIN_VERSION}  ·  {PLUGIN_FECHA}")
-    lbl_meta.setStyleSheet("color: #666666; font-size: 9pt;")
+    lbl_meta.setStyleSheet("font-size: 9pt;")
     lbl_meta.setAlignment(Qt.AlignmentFlag.AlignCenter)
     layout.addWidget(lbl_meta)
 
     btn = QPushButton("Cerrar")
-    btn.setStyleSheet("background:#0073e6; color:white; border-radius:4px; "
-                      "padding:7px 20px; font-weight:bold; font-size:10pt;")
+    btn.setObjectName("primary_button")
     btn.clicked.connect(dlg.accept)
     h = QHBoxLayout(); h.addStretch(); h.addWidget(btn); layout.addLayout(h)
 
@@ -1049,7 +1129,7 @@ class ExportDialog(QDialog):
         lbl_crs_info = QLabel("El GeoPackage se exporta con las coordenadas actuales "
                               "de cada capa (sin reproyectar).")
         lbl_crs_info.setWordWrap(True)
-        lbl_crs_info.setStyleSheet("color: #666666; font-size: 9pt;")
+        lbl_crs_info.setStyleSheet("font-size: 9pt;")
         layout.addWidget(lbl_crs_info)
 
         # --- Qué exportar ---
@@ -1116,9 +1196,6 @@ def main_dialog(iface):
     dialog.setWindowTitle("Análisis Granulométrico por Fotointerpretación")
     dialog.setMinimumWidth(540)
 
-    # ponytail: el diálogo fija su propio tema claro en vez de heredar el de
-    # QGIS. Adaptarse al tema oscuro exigiría tokenizar cada color y probar
-    # ambos temas; si algún día se pide, ese es el camino.
     dialog.setStyleSheet(DIALOG_STYLE)
 
     # Estado del diálogo para compartir entre funciones
@@ -1149,7 +1226,7 @@ def main_dialog(iface):
 
     # --- Título ---
     title = QLabel("Análisis Granulométrico por Fotointerpretación")
-    title.setStyleSheet("font-size: 14pt; font-weight: bold; color: #1a4a7a; margin-bottom: 4px;")
+    title.setStyleSheet("font-size: 14pt; font-weight: bold; margin-bottom: 4px;")
     title.setAlignment(Qt.AlignmentFlag.AlignCenter)
     layout.addWidget(title)
 
@@ -1168,7 +1245,7 @@ def main_dialog(iface):
         combo_layer.addItem(lyr.name(), lyr.id())
     lay_capas.addRow("Capa de polígonos:", combo_layer)
     lbl_count = QLabel("—")
-    lbl_count.setStyleSheet("color: #0073e6; font-weight: bold;")
+    lbl_count.setStyleSheet("font-weight: bold;")
     lay_capas.addRow("Polígonos en capa:", lbl_count)
 
     # --- Grupo 2: Área total (contorno de la foto) ---
@@ -1176,14 +1253,25 @@ def main_dialog(iface):
     lay_area = QVBoxLayout(grp_area)
     lay_area.setSpacing(8)
     hbtn = QHBoxLayout()
-    btn_contorno_raster = QPushButton("🖼  Usar Contorno del Ráster")
-    btn_dibujar = QPushButton("✏  Dibujar Contorno")
-    btn_borrar = QPushButton("🗑  Borrar")
+    btn_contorno_raster = QPushButton(QgsApplication.getThemeIcon("mActionAddRasterLayer.svg"),
+                                      "Usar Contorno del Ráster")
+    # Menú con los mismos tres modos de dibujo que "Dibujar Recorte" — nombres
+    # e íconos de QGIS (por segmento / por flujo / por forma: rectángulo).
+    btn_dibujar = QPushButton("Dibujar Contorno")
+    menu_dibujar = QMenu(btn_dibujar)
+    act_area_segmento = menu_dibujar.addAction(
+        QgsApplication.getThemeIcon("mActionDigitizeWithSegment.svg"), "Por segmento")
+    act_area_flujo = menu_dibujar.addAction(
+        QgsApplication.getThemeIcon("mActionCapturePolygon.svg"), "Por flujo")
+    act_area_forma = menu_dibujar.addAction(
+        QgsApplication.getThemeIcon("mActionSelectRectangle.svg"), "Por forma: Rectángulo")
+    btn_dibujar.setMenu(menu_dibujar)
+    btn_borrar = QPushButton(QgsApplication.getThemeIcon("mActionDeleteSelected.svg"), "Borrar")
     hbtn.addWidget(btn_contorno_raster)
     hbtn.addWidget(btn_dibujar)
     hbtn.addWidget(btn_borrar)
     lbl_area_total = QLabel("Área total: — (genera o dibuja el contorno)")
-    lbl_area_total.setStyleSheet("color: #0073e6; font-weight: bold;")
+    lbl_area_total.setStyleSheet("font-weight: bold;")
     lay_area.addLayout(hbtn)
     lay_area.addWidget(lbl_area_total)
 
@@ -1203,9 +1291,9 @@ def main_dialog(iface):
     lay_recorte = QVBoxLayout(grp_recorte)
     lay_recorte.setSpacing(8)
     hbtn_recorte = QHBoxLayout()
-    # Menú con las técnicas de captura reales de QGIS (Qgis.CaptureTechnique):
-    # por segmento, por flujo, y por forma (rectángulo, vía QgsMapToolExtent —
-    # el "Shape" real de QGIS vive en qgis_app.dll y no tiene binding Python).
+    # Menú con los nombres de QGIS para los tres modos (por segmento / por
+    # flujo / por forma: rectángulo), dibujados con PolygonMapTool propio —
+    # ver la nota en esa clase sobre por qué no usa QgsMapToolDigitizeFeature.
     btn_dibujar_recorte = QPushButton("Dibujar Recorte")
     menu_recorte = QMenu(btn_dibujar_recorte)
     act_recorte_segmento = menu_recorte.addAction(
@@ -1230,7 +1318,7 @@ def main_dialog(iface):
     lay_info.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
     lbl_dims = QLabel("—")
     lbl_mp = QLabel("—")
-    lbl_mp.setStyleSheet("color: #0073e6; font-weight: bold;")
+    lbl_mp.setStyleSheet("font-weight: bold;")
     lbl_pixel = QLabel("—")
     lay_info.addRow("Dimensiones (px):", lbl_dims)
     lay_info.addRow("Tamaño de imagen:", lbl_mp)
@@ -1269,14 +1357,14 @@ def main_dialog(iface):
     # --- Botones de acción (fuera de las pestañas: siempre visibles) ---
     sep = QFrame()
     sep.setFrameShape(QFrame.Shape.HLine)
-    sep.setStyleSheet("color: #dddddd;")
     layout.addWidget(sep)
 
     hact = QHBoxLayout()
-    btn_acerca_de = QPushButton("ℹ  Acerca de")
+    btn_acerca_de = QPushButton(QgsApplication.getThemeIcon("mActionHelpContents.svg"),
+                                "Acerca de")
     hact.addWidget(btn_acerca_de)
     hact.addStretch()
-    btn_procesar = QPushButton("▶  Procesar Capa")
+    btn_procesar = QPushButton(QgsApplication.getThemeIcon("mActionStart.svg"), "Procesar Capa")
     btn_procesar.setObjectName("primary_button")
     btn_exportar = QPushButton(QgsApplication.getThemeIcon("mActionFileSave.svg"), "Exportar Todo")
     btn_exportar.setEnabled(False)
@@ -1344,14 +1432,22 @@ def main_dialog(iface):
         iface.messageBar().pushMessage("Éxito", "Contorno de área total actualizado.",
                                        level=Qgis.MessageLevel.Success, duration=3)
 
-    def on_dibujar():
+    _MODO_MSG = {
+        "segmento": "Por segmento: clic izquierdo para cada vértice, clic derecho para cerrar.",
+        "flujo": "Por flujo: mantén presionado el clic y mueve el mouse; suelta para cerrar.",
+        "rectangulo": "Por forma (rectángulo): clic en una esquina, clic en la opuesta.",
+    }
+
+    def _start_dibujo(modo, on_geom, on_cancel, extra_msg=""):
         dialog.hide()
-        dialog.map_tool = PolygonMapTool(iface, on_drawing_complete)
+        dialog.map_tool = PolygonMapTool(iface, on_geom, on_cancel, modo)
         iface.mapCanvas().setMapTool(dialog.map_tool)
-        iface.messageBar().pushMessage("Herramienta Activada",
-                                       "Dibuja el contorno del área total en el mapa. "
-                                       "Clic derecho para finalizar. Escape para reiniciar el trazo.",
-                                       duration=7)
+        iface.messageBar().pushMessage("Herramienta activada",
+                                       _MODO_MSG[modo] + extra_msg, duration=7)
+
+    def on_dibujar(modo):
+        _start_dibujo(modo, on_drawing_complete, lambda: dialog.show(),
+                     " Escape borra el trazo (o cancela si ya no había nada).")
 
     # ---- Recorte de la foto ----
     def get_selected_raster():
@@ -1373,66 +1469,18 @@ def main_dialog(iface):
         lbl_recorte_estado.setText(f"Recorte definido: {geom.area():.4f} m²")
         btn_guardar_recorte.setEnabled(True)
 
-    def _start_recorte_common():
-        """Limpia el recorte anterior (geom + rubber band verde) y oculta el
-        diálogo. Común a los tres modos de dibujo (segmento/flujo/forma)."""
+    def on_dibujar_recorte(modo):
+        """Limpia el recorte anterior (geom + rubber band verde) y arranca el
+        dibujo en el modo elegido (segmento/flujo/rectángulo)."""
         if get_selected_raster() is None:
-            return False
+            return
         dialog._crop_geom = None
         dialog._crop_rubber.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
         lbl_recorte_estado.setText("Sin recorte definido.")
         btn_guardar_recorte.setEnabled(False)
         iface.mapCanvas().refresh()
-        dialog.hide()
-        return True
-
-    def on_dibujar_recorte_captura(technique):
-        """Por segmento o por flujo, con la herramienta real de QGIS
-        (QgsMapToolDigitizeFeature + Qgis.CaptureTechnique)."""
-        if not _start_recorte_common():
-            return
-
-        crs = QgsProject.instance().crs()
-        tmp_layer = QgsVectorLayer(f"Polygon?crs={crs.authid()}", "tmp_recorte", "memory")
-        dialog._digitize_tmp_layer = tmp_layer  # referencia viva: si se recolecta, crashea
-
-        tool = QgsMapToolDigitizeFeature(iface.mapCanvas(), iface.cadDockWidget(),
-                                         QgsMapToolCapture.CaptureMode.CapturePolygon)
-        tool.setLayer(tmp_layer)
-        tool.setCheckGeometryType(False)
-        tool.setCurrentCaptureTechnique(technique)
-        tool.digitizingCompleted.connect(lambda feat: on_recorte_dibujado(feat.geometry()))
-        tool.digitizingFinished.connect(lambda: dialog.show())
-        tool.digitizingCanceled.connect(lambda: dialog.show())
-
-        dialog.map_tool = tool
-        iface.mapCanvas().setMapTool(tool)
-        if technique == Qgis.CaptureTechnique.Streaming:
-            msg = "Por flujo: mantén el clic y mueve el mouse sobre la foto; suelta para cerrar."
-        else:
-            msg = ("Por segmento: clic izquierdo para cada vértice; doble clic o Enter "
-                   "para cerrar.")
-        iface.messageBar().pushMessage("Herramienta Activada (QGIS)", msg, duration=7)
-
-    def on_dibujar_recorte_rectangulo():
-        """Por forma: rectángulo de dos clics, con QgsMapToolExtent (la
-        herramienta nativa más cercana — el "Shape" real de QGIS no tiene
-        binding Python, ver plan)."""
-        if not _start_recorte_common():
-            return
-
-        tool = QgsMapToolExtent(iface.mapCanvas())
-
-        def _on_extent(rect):
-            iface.mapCanvas().unsetMapTool(tool)
-            on_recorte_dibujado(QgsGeometry.fromRect(rect))
-
-        tool.extentChanged.connect(_on_extent)
-        dialog.map_tool = tool
-        iface.mapCanvas().setMapTool(tool)
-        iface.messageBar().pushMessage("Herramienta Activada (QGIS)",
-                                       "Por forma (rectángulo): clic en una esquina, "
-                                       "clic en la opuesta.", duration=7)
+        _start_dibujo(modo, on_recorte_dibujado, lambda: dialog.show(),
+                     " Escape borra el trazo (o cancela si ya no había nada).")
 
     def on_guardar_recorte():
         rlyr = get_selected_raster()
@@ -1484,11 +1532,19 @@ def main_dialog(iface):
             return
 
         proj_crs = QgsProject.instance().crs()
-        rect = rlyr.extent()
+
+        # Huella real de los píxeles con datos (no el rectángulo envolvente):
+        # las ortofotos traen borde transparente y el bbox sobreestima el área.
+        footprint_log = []
+        geom = raster_footprint_geom(rlyr, log_fn=footprint_log.append)
+        es_huella = geom is not None
+        if not es_huella:
+            geom = QgsGeometry.fromRect(rlyr.extent())
+
         if rlyr.crs() != proj_crs:
             tr = QgsCoordinateTransform(rlyr.crs(), proj_crs, QgsProject.instance())
             try:
-                rect = tr.transformBoundingBox(rect)
+                geom.transform(tr)
             except Exception:
                 QMessageBox.critical(dialog, "Error",
                                      "No se pudo reproyectar el contorno del ráster al CRS del proyecto.")
@@ -1500,8 +1556,9 @@ def main_dialog(iface):
                                 "Las áreas calculadas no estarán en m² reales; "
                                 "usa un CRS proyectado (p. ej. UTM) para resultados correctos.")
 
-        geom = QgsGeometry.fromRect(rect)
         set_area_geom(geom)
+        origen = "huella real de la foto" if es_huella else "rectángulo envolvente del ráster"
+        lbl_area_total.setText(lbl_area_total.text() + f"  ({origen})")
         iface.mapCanvas().refresh()
 
     def on_borrar_area():
@@ -1547,7 +1604,6 @@ def main_dialog(iface):
         dialog._gradation = gradation
         dialog._params = gparams
 
-        iface.showAttributeTable(lyr)
         progress_bar.setVisible(False)
         btn_procesar.setEnabled(True)
         btn_exportar.setEnabled(True)
@@ -1640,13 +1696,13 @@ def main_dialog(iface):
         if dialog._crop_rubber:
             dialog._crop_rubber.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
 
-    act_recorte_segmento.triggered.connect(
-        lambda: on_dibujar_recorte_captura(Qgis.CaptureTechnique.StraightSegments))
-    act_recorte_flujo.triggered.connect(
-        lambda: on_dibujar_recorte_captura(Qgis.CaptureTechnique.Streaming))
-    act_recorte_forma.triggered.connect(on_dibujar_recorte_rectangulo)
+    act_recorte_segmento.triggered.connect(lambda: on_dibujar_recorte("segmento"))
+    act_recorte_flujo.triggered.connect(lambda: on_dibujar_recorte("flujo"))
+    act_recorte_forma.triggered.connect(lambda: on_dibujar_recorte("rectangulo"))
+    act_area_segmento.triggered.connect(lambda: on_dibujar("segmento"))
+    act_area_flujo.triggered.connect(lambda: on_dibujar("flujo"))
+    act_area_forma.triggered.connect(lambda: on_dibujar("rectangulo"))
     btn_guardar_recorte.clicked.connect(on_guardar_recorte)
-    btn_dibujar.clicked.connect(on_dibujar)
     btn_contorno_raster.clicked.connect(on_usar_contorno_raster)
     btn_borrar.clicked.connect(on_borrar_area)
     btn_procesar.clicked.connect(on_procesar)
