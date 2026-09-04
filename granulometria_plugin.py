@@ -1067,7 +1067,7 @@ def parse_inches(value_str):
     return float(value_str)
 
 
-PLUGIN_VERSION = "1.0.2"
+PLUGIN_VERSION = "1.0.3"
 PLUGIN_FECHA = "2026-09-04"
 
 ACERCA_DE_QUE_HACE = (
@@ -1093,6 +1093,20 @@ ACERCA_DE_LICENCIA = (
 )
 
 ACERCA_DE_NOVEDADES = (
+    "Versión 1.0.3:\n"
+    "  • En «Etiquetar Foto»: el texto libre queda apilado arriba de la "
+    "fecha (ambos abajo-izquierda) y el logo solo, abajo-derecha. Tamaño de "
+    "texto y ancho de logo por defecto: 60 px y 800 px.\n"
+    "  • El fondo blanco que traen estas fotos fuera del área realmente "
+    "fotografiada ahora se reemplaza por negro, cubriendo toda la zona.\n"
+    "  • La foto se rota a horizontal cuando es vertical, y ahora el archivo "
+    "exportado coincide exactamente con la vista previa (antes solo la "
+    "vista previa rotaba).\n"
+    "  • El nombre sugerido al guardar la foto etiquetada es la fecha.\n"
+    "  • La pestaña «Etiquetar Foto» ya no estira el diálogo: su contenido "
+    "va en un área con scroll propio.\n"
+    "  • Aviso de licencia y contacto (GPLv3; uso comercial/adaptación, "
+    "contactar antes al autor) en el «Acerca de» y el README.\n\n"
     "Versión 1.0.2:\n"
     "  • Nuevo paso opcional «Preparar Foto»: recortar la fotografía con un "
     "polígono de forma libre (sin pérdida de calidad) antes de analizarla, con "
