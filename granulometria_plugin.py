@@ -30,9 +30,12 @@ import shutil
 from qgis.core import (
     QgsField, QgsProject, QgsGeometry, QgsWkbTypes, QgsVectorLayer, QgsFeature,
     QgsSingleSymbolRenderer, QgsFillSymbol, QgsRasterLayer,
-    QgsVectorFileWriter, QgsCoordinateTransform, Qgis
+    QgsVectorFileWriter, QgsCoordinateTransform, Qgis, QgsApplication
 )
-from qgis.gui import QgsMapToolEmitPoint, QgsRubberBand
+from qgis.gui import (
+    QgsMapToolEmitPoint, QgsRubberBand, QgsMapToolDigitizeFeature,
+    QgsMapToolCapture, QgsMapToolExtent
+)
 from qgis.PyQt.QtCore import QVariant, Qt, QSettings
 from qgis.PyQt.QtWidgets import (
     QAction, QComboBox, QDialog, QVBoxLayout, QLabel, QPushButton, QMessageBox,
@@ -104,44 +107,29 @@ TAMICES_STD = [
 # ===========================================================================
 
 class PolygonMapTool(QgsMapToolEmitPoint):
-    def __init__(self, iface, on_polygon_drawn, freehand=False):
+    def __init__(self, iface, on_polygon_drawn):
         super().__init__(iface.mapCanvas())
         self.iface = iface
         self.canvas = iface.mapCanvas()
         self.on_polygon_drawn = on_polygon_drawn
-        self.freehand = freehand
         self.points = []
-        self._dragging = False
         self.rubber_band = QgsRubberBand(self.canvas, QgsWkbTypes.GeometryType.PolygonGeometry)
         self.rubber_band.setColor(QColor(255, 0, 0, 100))
         self.rubber_band.setWidth(2)
 
     def canvasPressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
-            if self.freehand:
-                self._dragging = True
-                self.points = [self.toMapCoordinates(e.pos())]
-            else:
-                self.points.append(self.toMapCoordinates(e.pos()))
+            self.points.append(self.toMapCoordinates(e.pos()))
             self.update_rubber_band()
         elif e.button() == Qt.MouseButton.RightButton:
             self.finalize_polygon()
 
     def canvasMoveEvent(self, e):
-        if self.freehand and self._dragging:
-            self.points.append(self.toMapCoordinates(e.pos()))
-            self.update_rubber_band()
-        elif self.points:
+        if self.points:
             self.update_rubber_band(self.toMapCoordinates(e.pos()))
-
-    def canvasReleaseEvent(self, e):
-        if self.freehand and self._dragging and e.button() == Qt.MouseButton.LeftButton:
-            self._dragging = False
-            self.finalize_polygon()
 
     def keyPressEvent(self, e):
         if e.key() == Qt.Key.Key_Escape:
-            self._dragging = False
             self.points = []
             self.rubber_band.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
 
@@ -162,7 +150,6 @@ class PolygonMapTool(QgsMapToolEmitPoint):
     def deactivate(self):
         self.rubber_band.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
         self.points = []
-        self._dragging = False
         super().deactivate()
 
 
@@ -933,7 +920,7 @@ def parse_inches(value_str):
     return float(value_str)
 
 
-PLUGIN_VERSION = "1.2.0"
+PLUGIN_VERSION = "1.3.0"
 PLUGIN_FECHA = "2026-09-04"
 
 ACERCA_DE_QUE_HACE = (
@@ -951,6 +938,12 @@ ACERCA_DE_QUE_HACE = (
 )
 
 ACERCA_DE_NOVEDADES = (
+    "Versión 1.3.0:\n"
+    "  • El recorte ahora se dibuja con las herramientas reales de "
+    "digitalización de QGIS: «Por segmento», «Por flujo» y «Por forma: "
+    "Rectángulo», elegibles desde el botón «Dibujar Recorte».\n"
+    "  • Íconos de «Guardar y Exportar…» y «Exportar Todo» iguales a los de "
+    "QGIS (guardar / guardar como).\n\n"
     "Versión 1.2.0:\n"
     "  • El recorte se puede dibujar de dos formas: manual (clic por clic) o a "
     "mano alzada (arrastrando el mouse). Se elige desde el propio botón "
@@ -1210,12 +1203,20 @@ def main_dialog(iface):
     lay_recorte = QVBoxLayout(grp_recorte)
     lay_recorte.setSpacing(8)
     hbtn_recorte = QHBoxLayout()
-    btn_dibujar_recorte = QPushButton("✏  Dibujar Recorte")
+    # Menú con las técnicas de captura reales de QGIS (Qgis.CaptureTechnique):
+    # por segmento, por flujo, y por forma (rectángulo, vía QgsMapToolExtent —
+    # el "Shape" real de QGIS vive en qgis_app.dll y no tiene binding Python).
+    btn_dibujar_recorte = QPushButton("Dibujar Recorte")
     menu_recorte = QMenu(btn_dibujar_recorte)
-    act_recorte_manual = menu_recorte.addAction("Manual (clic por clic)")
-    act_recorte_freehand = menu_recorte.addAction("A mano alzada (arrastrar)")
+    act_recorte_segmento = menu_recorte.addAction(
+        QgsApplication.getThemeIcon("mActionDigitizeWithSegment.svg"), "Por segmento")
+    act_recorte_flujo = menu_recorte.addAction(
+        QgsApplication.getThemeIcon("mActionCapturePolygon.svg"), "Por flujo")
+    act_recorte_forma = menu_recorte.addAction(
+        QgsApplication.getThemeIcon("mActionSelectRectangle.svg"), "Por forma: Rectángulo")
     btn_dibujar_recorte.setMenu(menu_recorte)
-    btn_guardar_recorte = QPushButton("💾  Guardar y Exportar…")
+    btn_guardar_recorte = QPushButton(QgsApplication.getThemeIcon("mActionFileSaveAs.svg"),
+                                      "Guardar y Exportar…")
     btn_guardar_recorte.setEnabled(False)
     hbtn_recorte.addWidget(btn_dibujar_recorte)
     hbtn_recorte.addWidget(btn_guardar_recorte)
@@ -1277,7 +1278,7 @@ def main_dialog(iface):
     hact.addStretch()
     btn_procesar = QPushButton("▶  Procesar Capa")
     btn_procesar.setObjectName("primary_button")
-    btn_exportar = QPushButton("💾  Exportar Todo")
+    btn_exportar = QPushButton(QgsApplication.getThemeIcon("mActionFileSave.svg"), "Exportar Todo")
     btn_exportar.setEnabled(False)
     hact.addWidget(btn_procesar)
     hact.addWidget(btn_exportar)
@@ -1372,28 +1373,66 @@ def main_dialog(iface):
         lbl_recorte_estado.setText(f"Recorte definido: {geom.area():.4f} m²")
         btn_guardar_recorte.setEnabled(True)
 
-    def on_dibujar_recorte(freehand):
+    def _start_recorte_common():
+        """Limpia el recorte anterior (geom + rubber band verde) y oculta el
+        diálogo. Común a los tres modos de dibujo (segmento/flujo/forma)."""
         if get_selected_raster() is None:
-            return
-
-        # Si había un recorte previo sin guardar, desaparece: no confundirlo
-        # con el trazo nuevo que está por empezar.
+            return False
         dialog._crop_geom = None
         dialog._crop_rubber.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
         lbl_recorte_estado.setText("Sin recorte definido.")
         btn_guardar_recorte.setEnabled(False)
         iface.mapCanvas().refresh()
-
         dialog.hide()
-        dialog.map_tool = PolygonMapTool(iface, on_recorte_dibujado, freehand=freehand)
-        iface.mapCanvas().setMapTool(dialog.map_tool)
-        if freehand:
-            msg = ("Dibuja el recorte arrastrando el mouse sobre la foto. "
-                   "Suelta el botón para cerrar el polígono. Escape para reiniciar el trazo.")
+        return True
+
+    def on_dibujar_recorte_captura(technique):
+        """Por segmento o por flujo, con la herramienta real de QGIS
+        (QgsMapToolDigitizeFeature + Qgis.CaptureTechnique)."""
+        if not _start_recorte_common():
+            return
+
+        crs = QgsProject.instance().crs()
+        tmp_layer = QgsVectorLayer(f"Polygon?crs={crs.authid()}", "tmp_recorte", "memory")
+        dialog._digitize_tmp_layer = tmp_layer  # referencia viva: si se recolecta, crashea
+
+        tool = QgsMapToolDigitizeFeature(iface.mapCanvas(), iface.cadDockWidget(),
+                                         QgsMapToolCapture.CaptureMode.CapturePolygon)
+        tool.setLayer(tmp_layer)
+        tool.setCheckGeometryType(False)
+        tool.setCurrentCaptureTechnique(technique)
+        tool.digitizingCompleted.connect(lambda feat: on_recorte_dibujado(feat.geometry()))
+        tool.digitizingFinished.connect(lambda: dialog.show())
+        tool.digitizingCanceled.connect(lambda: dialog.show())
+
+        dialog.map_tool = tool
+        iface.mapCanvas().setMapTool(tool)
+        if technique == Qgis.CaptureTechnique.Streaming:
+            msg = "Por flujo: mantén el clic y mueve el mouse sobre la foto; suelta para cerrar."
         else:
-            msg = ("Dibuja el recorte sobre la foto: clic izquierdo para agregar vértices, "
-                   "clic derecho para cerrar. Escape para reiniciar el trazo.")
-        iface.messageBar().pushMessage("Herramienta Activada", msg, duration=7)
+            msg = ("Por segmento: clic izquierdo para cada vértice; doble clic o Enter "
+                   "para cerrar.")
+        iface.messageBar().pushMessage("Herramienta Activada (QGIS)", msg, duration=7)
+
+    def on_dibujar_recorte_rectangulo():
+        """Por forma: rectángulo de dos clics, con QgsMapToolExtent (la
+        herramienta nativa más cercana — el "Shape" real de QGIS no tiene
+        binding Python, ver plan)."""
+        if not _start_recorte_common():
+            return
+
+        tool = QgsMapToolExtent(iface.mapCanvas())
+
+        def _on_extent(rect):
+            iface.mapCanvas().unsetMapTool(tool)
+            on_recorte_dibujado(QgsGeometry.fromRect(rect))
+
+        tool.extentChanged.connect(_on_extent)
+        dialog.map_tool = tool
+        iface.mapCanvas().setMapTool(tool)
+        iface.messageBar().pushMessage("Herramienta Activada (QGIS)",
+                                       "Por forma (rectángulo): clic en una esquina, "
+                                       "clic en la opuesta.", duration=7)
 
     def on_guardar_recorte():
         rlyr = get_selected_raster()
@@ -1601,8 +1640,11 @@ def main_dialog(iface):
         if dialog._crop_rubber:
             dialog._crop_rubber.reset(QgsWkbTypes.GeometryType.PolygonGeometry)
 
-    act_recorte_manual.triggered.connect(lambda: on_dibujar_recorte(freehand=False))
-    act_recorte_freehand.triggered.connect(lambda: on_dibujar_recorte(freehand=True))
+    act_recorte_segmento.triggered.connect(
+        lambda: on_dibujar_recorte_captura(Qgis.CaptureTechnique.StraightSegments))
+    act_recorte_flujo.triggered.connect(
+        lambda: on_dibujar_recorte_captura(Qgis.CaptureTechnique.Streaming))
+    act_recorte_forma.triggered.connect(on_dibujar_recorte_rectangulo)
     btn_guardar_recorte.clicked.connect(on_guardar_recorte)
     btn_dibujar.clicked.connect(on_dibujar)
     btn_contorno_raster.clicked.connect(on_usar_contorno_raster)

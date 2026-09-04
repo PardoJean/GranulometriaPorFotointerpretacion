@@ -1,9 +1,9 @@
 [general]
 name=Granulometria por Fotointerpretacion
-qgisMinimumVersion=3.0
+qgisMinimumVersion=3.28
 description=Measures rock grain sizes in a photo by photointerpretation and exports gradation reports.
 about=Granulometria por Fotointerpretacion (Photointerpretation Grain Size Analysis) measures the size of rock grains in a georeferenced photo, typically captured by drone. The user draws the photo outline to obtain the total area, then draws or adjusts grain polygons (for example, produced by a segmentation tool such as GeoAI/Segment Anything). The plugin filters grains by a sieve-size threshold, computes coarse/fine material areas and percentages, and exports: (1) an Excel workbook with area/diameter data in a fixed template layout, (2) a second Excel workbook with image and material summary information, and (3) a GeoPackage bundling the polygon layer, the source photo raster, and an embedded QGIS project, exported as-is in the project's coordinate system (no reprojection). No external Python packages are required: the plugin only uses Qt (via qgis.PyQt) and qgis.core/qgis.gui, all of which ship with QGIS. The Excel files are written natively with the zipfile/XML standard library (no openpyxl dependency).
-version=1.2.0
+version=1.3.0
 author=Jean Pardo
 email=jeandariopardo@gmail.com
 homepage=https://github.com/PardoJean/GranulometriaPorFotointerpretacion
@@ -13,7 +13,8 @@ icon=icon.png
 experimental=True
 category=Vector
 
-changelog=1.2.0 - Crop drawing can now be manual (click by click) or freehand (drag the mouse), chosen from the "Draw Crop" button's dropdown. Escape resets the in-progress polygon (crop or total-area outline) without leaving the drawing tool. "Process Layer" and "Export All" now only show on the "Analyse" tab. The previous crop outline is cleared as soon as a new one starts.
+changelog=1.3.0 - Crop drawing now uses QGIS's real digitizing tools instead of a custom one: "By segment" and "By flow/streaming" via QgsMapToolDigitizeFeature and Qgis.CaptureTechnique, and "By shape: Rectangle" via QgsMapToolExtent (QGIS's own Shape/Add Rectangle tools are private to the qgis_app application and have no Python binding, so this is the closest public native equivalent). Raises qgisMinimumVersion to 3.28 (QgsMapToolDigitizeFeature.digitizingCanceled requires it). The crop-save and export-all buttons now use QGIS's own save/save-as icons instead of an emoji.
+    1.2.0 - Crop drawing can now be manual (click by click) or freehand (drag the mouse), chosen from the "Draw Crop" button's dropdown. Escape resets the in-progress polygon (crop or total-area outline) without leaving the drawing tool. "Process Layer" and "Export All" now only show on the "Analyse" tab. The previous crop outline is cleared as soon as a new one starts.
     1.1.0 - New photo cropping step before the analysis: draw a free-form polygon over the photo and export the cropped area as a new GeoTIFF with no quality loss (same resolution, nearest-neighbour, lossless LZW compression, transparent outside the polygon). The cropped raster is loaded and selected automatically. The main dialog is now organised in two tabs (Prepare Photo / Analyse), with a single shared stylesheet, visible keyboard focus on every control and improved text contrast.
     1.0.1 - Qt6 compatibility fixes: fully-qualified enums, imports via qgis.PyQt instead of PyQt5, exec_() renamed to exec(). Removed a silent except/pass in the GeoPackage overview-building step (now logs the error instead of discarding it).
     1.0.0 - First public release.
