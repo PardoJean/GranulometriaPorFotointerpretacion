@@ -67,4 +67,7 @@ itself, only measurement and reporting.
 ## License
 
 Licensed under the GNU General Public License v3.0 — see [LICENSE](LICENSE)
-for the full text.
+for the full text. GPLv3 permits free copying, redistribution and
+modification, including commercially; as the author I only ask that if you
+plan to adapt or integrate this plugin into your own commercial project, you
+reach out first — contact: Jean Pardo, jeandariopardo@gmail.com.

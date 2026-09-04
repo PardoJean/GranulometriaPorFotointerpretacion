@@ -1057,6 +1057,14 @@ ACERCA_DE_QUE_HACE = (
     "4) El área total menos el área de gruesos es el material fino."
 )
 
+ACERCA_DE_LICENCIA = (
+    "Licencia GNU GPLv3: puedes copiar, redistribuir y modificar este plugin "
+    "libremente, incluso con fines comerciales. Si vas a adaptarlo o "
+    "integrarlo en un proyecto propio, se agradece que primero te pongas en "
+    "contacto con el autor.\n\n"
+    "Jean Pardo — jeandariopardo@gmail.com"
+)
+
 ACERCA_DE_NOVEDADES = (
     "Versión 1.0.2:\n"
     "  • Nuevo paso opcional «Preparar Foto»: recortar la fotografía con un "
@@ -1112,6 +1120,14 @@ def show_about_dialog(parent=None):
     lbl2.setWordWrap(True)
     l2.addWidget(lbl2)
     layout.addWidget(grp2)
+
+    grp3 = QGroupBox("Licencia y contacto")
+    l3 = QVBoxLayout(grp3)
+    lbl3 = QLabel(ACERCA_DE_LICENCIA)
+    lbl3.setWordWrap(True)
+    lbl3.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+    l3.addWidget(lbl3)
+    layout.addWidget(grp3)
 
     lbl_meta = QLabel(f"Versión {PLUGIN_VERSION}  ·  {PLUGIN_FECHA}")
     lbl_meta.setStyleSheet("font-size: 9pt;")
