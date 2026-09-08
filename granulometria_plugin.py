@@ -41,8 +41,7 @@ from qgis.PyQt.QtWidgets import (
     QWidget, QFrame, QMenu, QDateEdit, QSpinBox, QScrollArea
 )
 from qgis.PyQt.QtGui import (
-    QIcon, QColor, QImage, QPainter, QFont, QFontMetrics, QPixmap, QTransform,
-    QRegion, QBitmap
+    QIcon, QColor, QImage, QPainter, QFont, QFontMetrics, QPixmap, QTransform
 )
 
 # ===========================================================================
@@ -52,8 +51,17 @@ from qgis.PyQt.QtGui import (
 # de QGIS (funciona igual en tema claro y oscuro). Solo se centra el título
 # de los QGroupBox, que por defecto en Qt sale pegado a la izquierda.
 DIALOG_STYLE = """
-QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top center; padding: 0 4px; }
+QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top center; padding: 0 4px;
+                    font-size: 11pt; font-weight: bold; }
 """
+
+
+def _label_seleccion(texto):
+    """QLabel en negrita para resaltar los pasos donde hay que elegir una
+    capa o una fotografía (rótulos de QFormLayout.addRow, planos por defecto)."""
+    lbl = QLabel(texto)
+    lbl.setStyleSheet("font-weight: bold;")
+    return lbl
 
 # ===========================================================================
 # TAMICES ESTÁNDAR ASTM (nombre, apertura en metros)
@@ -919,25 +927,11 @@ def raster_footprint_geom(raster_layer, log_fn=None):
 # ===========================================================================
 
 def preparar_foto_etiqueta(img):
-    """Reemplaza por negro el relleno blanco puro de fondo (típico de las
-    ortofotos de Metashape fuera del área realmente fotografiada — no es
-    transparencia real: son píxeles (255,255,255) opacos ya horneados en la
-    foto, confirmado contra fotos reales del laboratorio) y rota la imagen a
-    horizontal si es vertical. La misma función se usa para la vista previa y
-    para el archivo final exportado, para que ambos coincidan.
-
-    Usa QImage.createMaskFromColor (nativo de Qt, en C++), no un bucle por
-    píxel en Python — tarda <0.1 s incluso en fotos de 15+ MP. Es un
-    reemplazo por color exacto: solo afecta relleno blanco puro y uniforme,
-    no zonas claras con textura/variación natural de una foto real.
-    """
+    """Rota la imagen a horizontal si viene vertical. La misma función se usa
+    para la vista previa y para el archivo final exportado, para que ambos
+    coincidan. Ya no toca el fondo de la foto (antes reemplazaba el relleno
+    blanco por negro; se quitó a pedido del usuario)."""
     out = img.convertToFormat(QImage.Format.Format_RGB32)
-    mask = out.createMaskFromColor(QColor(255, 255, 255).rgb(), Qt.MaskMode.MaskOutColor)
-    region = QRegion(QBitmap.fromImage(mask))
-    painter = QPainter(out)
-    painter.setClipRegion(region)
-    painter.fillRect(out.rect(), QColor("black"))
-    painter.end()
     if out.height() > out.width():
         out = out.transformed(QTransform().rotate(90))
     return out
@@ -1094,7 +1088,7 @@ def parse_inches(value_str):
     return float(value_str)
 
 
-PLUGIN_VERSION = "1.0.4"
+PLUGIN_VERSION = "1.0.6"
 PLUGIN_FECHA = "2026-09-08"
 
 ACERCA_DE_QUE_HACE = (
@@ -1117,68 +1111,24 @@ ACERCA_DE_LICENCIA = (
     "libremente, incluso con fines comerciales. Si vas a adaptarlo o "
     "integrarlo en un proyecto propio, se agradece que primero te pongas en "
     "contacto con el autor.\n\n"
-    "Jean Pardo — jeandariopardo@gmail.com"
+    "Jean Pardo — jeandariopardo@gmail.com\n\n"
+    "Código, historial de versiones y reportes de error:\n"
+    "https://github.com/PardoJean/GranulometriaPorFotointerpretacion"
 )
 
 ACERCA_DE_NOVEDADES = (
-    "Versión 1.0.4:\n"
-    "  • Corregido «Usar contorno del ráster»: si el CRS del proyecto no "
-    "coincidía con el de la foto, el contorno se reproyectaba y quedaba "
-    "desplazado con un área mal calculada. Estas fotos tienen un CRS con "
-    "nombre real (p. ej. PSAD56/UTM) pero coordenadas de escala local, no una "
-    "posición geodésica real, así que reproyectar las desplaza en vez de "
-    "corregirlas. Ahora el plugin no reproyecta: avisa y no continúa si el "
-    "CRS del proyecto no coincide ya con el de la foto.\n\n"
-    "Versión 1.0.3 (primera versión estable, no experimental):\n"
-    "  • Corregido un error de cuantización que redondeaba el diámetro de cada "
-    "grano a 2 decimales en metros (escalones de 1 cm), lo que afectaba la "
-    "columna «Diámetro» del Excel y los tamices más finos de la curva "
-    "granulométrica (D10/D30/Cu/Cc); ahora conserva 4 decimales.\n"
-    "  • El cálculo de la huella real de la foto ya no une miles de polígonos "
-    "de borde uno por uno (podía congelar QGIS varios minutos en fotos de dron "
-    "grandes); ahora toma directamente el polígono principal.\n"
-    "  • La herramienta de dibujo ya no deja el diálogo oculto para siempre si "
-    "eliges otra herramienta de QGIS a mitad de un trazo, y se desactiva "
-    "correctamente al cerrar el diálogo.\n"
-    "  • Nuevos avisos cuando la capa de polígonos está vacía, el contorno de "
-    "área total se autointersecta, o la foto no tiene un sistema de "
-    "coordenadas válido — antes producían un reporte con números incorrectos "
-    "sin ninguna advertencia.\n"
-    "  • El aviso de «no hay capas de polígono» ahora se muestra en rojo "
-    "(error), no en verde (éxito).\n"
-    "  • Requisito mínimo declarado subido a QGIS 3.22 (el mínimo real de la "
-    "API que usa el plugin desde la 1.0.2).\n\n"
-    "Versión 1.0.2:\n"
-    "  • Nuevo paso opcional «Preparar Foto»: recortar la fotografía con un "
-    "polígono de forma libre (sin pérdida de calidad) antes de analizarla, con "
-    "tres formas de dibujar el contorno: «Por segmento», «Por flujo» y «Por "
-    "forma: Rectángulo».\n"
-    "  • El área total ahora usa la huella real de píxeles de la foto (no el "
-    "rectángulo envolvente), que en fotos con borde transparente sobreestimaba "
-    "el área hasta en un 39 %.\n"
-    "  • El contorno de área total se puede dibujar con los mismos tres modos "
-    "que el recorte, y el grupo «Área Total» ahora muestra y permite elegir "
-    "sobre qué foto se está trabajando.\n"
-    "  • Interfaz reorganizada en pestañas («Preparar Foto», «Analizar», "
-    "«Etiquetar Foto»), con apariencia nativa de QGIS (tema y fuente heredados, "
-    "íconos del propio QGIS en vez de emojis) y foco de teclado visible.\n"
-    "  • Nueva pestaña «Etiquetar Foto»: pega sobre la fotografía la fecha "
-    "(calendario, formato AAAA-MM-DD) con un texto libre apilado encima (ambos "
-    "abajo-izquierda) y un logo propio (recordado de forma privada) solo "
-    "abajo-derecha; tamaño de texto y ancho de logo por defecto 60 px y "
-    "800 px. El fondo blanco que traen estas fotos fuera del área realmente "
-    "fotografiada se reemplaza por negro y la foto se rota a horizontal "
-    "cuando es vertical — el archivo exportado coincide exactamente con la "
-    "vista previa. El nombre sugerido al guardar es la fecha, y la pestaña "
-    "va en un área con scroll propio para no estirar el diálogo.\n"
-    "  • «Procesar Capa» ya no abre la tabla de atributos ni deja la capa "
-    "temporal del área total en el panel tras exportar.\n"
-    "  • Aviso de licencia y contacto (GPLv3; uso comercial/adaptación, "
-    "contactar antes al autor) en el «Acerca de» y el README.\n\n"
-    "Versión 1.0.1:\n"
-    "  • Compatibilidad con Qt6 (enums calificados, imports vía qgis.PyQt).\n\n"
-    "Versión 1.0.0:\n"
-    "  • Primera versión pública del plugin."
+    "Versión 1.0.6:\n"
+    "  • Pestaña «Etiquetar Foto»: la foto ahora se elige con un explorador "
+    "de archivos (cualquier .png/.jpg/.tif del disco, abre en la carpeta de "
+    "la foto ya seleccionada en «Preparar Foto») en vez de exigir que ya "
+    "esté cargada como capa ráster en el proyecto.\n"
+    "  • Ya no se reemplaza por negro el fondo blanco fuera del área "
+    "fotografiada: la foto se exporta con su fondo original (se conserva "
+    "la rotación a horizontal cuando la foto es vertical).\n"
+    "  • El campo de texto libre ahora sugiere como ejemplo el número de "
+    "muestra.\n"
+    "  • Títulos de sección y rótulos de selección de capa/foto ahora en "
+    "negrita y más grandes, para ubicarlos de un vistazo."
 )
 
 
@@ -1342,6 +1292,7 @@ def main_dialog(iface):
     dialog._gradation = None
     dialog._params = None
     dialog._crop_geom = None
+    dialog._foto_etiqueta = None
 
     def _crear_area_layer():
         crs = QgsProject.instance().crs().authid()
@@ -1386,7 +1337,7 @@ def main_dialog(iface):
     combo_layer = QComboBox()
     for lyr in layers:
         combo_layer.addItem(lyr.name(), lyr.id())
-    lay_capas.addRow("Capa de polígonos:", combo_layer)
+    lay_capas.addRow(_label_seleccion("Capa de polígonos:"), combo_layer)
     lbl_count = QLabel("—")
     lbl_count.setStyleSheet("font-weight: bold;")
     lay_capas.addRow("Polígonos en capa:", lbl_count)
@@ -1401,7 +1352,7 @@ def main_dialog(iface):
     combo_raster_area = QComboBox()
     for r in get_raster_layers():
         combo_raster_area.addItem(r.name(), r.id())
-    form_foto_area.addRow("Fotografía:", combo_raster_area)
+    form_foto_area.addRow(_label_seleccion("Fotografía:"), combo_raster_area)
     lay_area.addLayout(form_foto_area)
     hbtn = QHBoxLayout()
     btn_contorno_raster = QPushButton(QgsApplication.getThemeIcon("mActionAddRasterLayer.svg"),
@@ -1482,13 +1433,17 @@ def main_dialog(iface):
 
     form_etiqueta = QFormLayout()
     form_etiqueta.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
-    combo_raster_etiqueta = QComboBox()
-    for r in get_raster_layers():
-        combo_raster_etiqueta.addItem(r.name(), r.id())
-    form_etiqueta.addRow("Fotografía:", combo_raster_etiqueta)
+    h_foto_etiqueta = QHBoxLayout()
+    btn_foto_etiqueta = QPushButton(QgsApplication.getThemeIcon("mActionAddRasterLayer.svg"),
+                                    "Elegir imagen…")
+    lbl_foto_etiqueta = QLabel("Ninguna imagen seleccionada")
+    lbl_foto_etiqueta.setWordWrap(True)
+    h_foto_etiqueta.addWidget(btn_foto_etiqueta)
+    h_foto_etiqueta.addWidget(lbl_foto_etiqueta, 1)
+    form_etiqueta.addRow(_label_seleccion("Fotografía:"), h_foto_etiqueta)
 
     txt_extra = QLineEdit()
-    txt_extra.setPlaceholderText("Texto libre (abajo-izq., sobre la fecha), p. ej. sitio o técnico")
+    txt_extra.setPlaceholderText("N.º de muestra, p. ej. M2 (va abajo-izq., sobre la fecha)")
     form_etiqueta.addRow("Texto (abajo-izq.):", txt_extra)
 
     date_edit = QDateEdit()
@@ -1540,7 +1495,7 @@ def main_dialog(iface):
     lay_preparar.setSpacing(12)
     form_foto = QFormLayout()
     form_foto.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
-    form_foto.addRow("Fotografía (ráster):", combo_raster)
+    form_foto.addRow(_label_seleccion("Fotografía (ráster):"), combo_raster)
     lay_preparar.addLayout(form_foto)
     lay_preparar.addWidget(grp_recorte)
     lay_preparar.addWidget(grp_info)
@@ -1638,8 +1593,6 @@ def main_dialog(iface):
     # blockSignals ni riesgo de bucle infinito.
     combo_raster.currentIndexChanged.connect(combo_raster_area.setCurrentIndex)
     combo_raster_area.currentIndexChanged.connect(combo_raster.setCurrentIndex)
-    combo_raster.currentIndexChanged.connect(combo_raster_etiqueta.setCurrentIndex)
-    combo_raster_etiqueta.currentIndexChanged.connect(combo_raster.setCurrentIndex)
     update_image_info()
 
     # ---- Parsear umbral ----
@@ -1755,7 +1708,6 @@ def main_dialog(iface):
             QgsProject.instance().addMapLayer(nueva)
             combo_raster.addItem(nueva.name(), nueva.id())
             combo_raster_area.addItem(nueva.name(), nueva.id())
-            combo_raster_etiqueta.addItem(nueva.name(), nueva.id())
             combo_raster.setCurrentIndex(combo_raster.count() - 1)
             iface.messageBar().pushMessage("Éxito",
                                            "Foto recortada guardada y cargada en el proyecto.",
@@ -1766,9 +1718,35 @@ def main_dialog(iface):
                                 + out_path)
 
     # ---- Etiquetar foto (fecha + texto + logo, para el informe) ----
-    def _raster_etiqueta():
-        rid = combo_raster_etiqueta.currentData()
-        return QgsProject.instance().mapLayer(rid) if rid else None
+    def _foto_etiqueta_path():
+        return dialog._foto_etiqueta
+
+    def on_elegir_foto_etiqueta():
+        # Carpeta inicial: la de la foto ya seleccionada en "Preparar Foto"
+        # (donde se trabajan las capas), si no hay, la última imagen elegida
+        # aquí, si no hay, la última carpeta usada por el plugin en general.
+        settings = QSettings()
+        carpeta_inicial = ""
+        rid = combo_raster.currentData()
+        rlyr = QgsProject.instance().mapLayer(rid) if rid else None
+        if rlyr:
+            carpeta_inicial = os.path.dirname(rlyr.source().split('|')[0])
+        if not carpeta_inicial:
+            ultima_foto = settings.value("GranulometriaGFI/foto_etiqueta_path", "")
+            carpeta_inicial = os.path.dirname(ultima_foto) if ultima_foto else ""
+        if not carpeta_inicial:
+            carpeta_inicial = settings.value("GranulometriaGFI/ultima_carpeta", "")
+
+        path, _ = QFileDialog.getOpenFileName(
+            dialog, "Elegir imagen", carpeta_inicial,
+            "Imágenes (*.png *.jpg *.jpeg *.tif *.tiff)")
+        if not path:
+            return
+        settings.setValue("GranulometriaGFI/foto_etiqueta_path", path)
+        dialog._foto_etiqueta = path
+        lbl_foto_etiqueta.setText(os.path.basename(path))
+        _ajustar_tamanos_por_defecto()
+        update_preview_etiqueta()
 
     def _logo_path():
         return QSettings().value("GranulometriaGFI/logo_path", "")
@@ -1805,18 +1783,18 @@ def main_dialog(iface):
         spin_logo.blockSignals(False)
 
     def update_preview_etiqueta():
-        rlyr = _raster_etiqueta()
-        if rlyr is None:
+        path = _foto_etiqueta_path()
+        if not path:
             lbl_preview_etiqueta.setPixmap(QPixmap())
             lbl_preview_etiqueta.setText("Selecciona una fotografía para ver la vista previa.")
             return
-        img = QImage(rlyr.source().split('|')[0])
+        img = QImage(path)
         if img.isNull():
             lbl_preview_etiqueta.setPixmap(QPixmap())
             lbl_preview_etiqueta.setText("No se pudo leer la fotografía.")
             return
-        # Misma preparación (fondo negro + rotación) que on_guardar_etiqueta,
-        # para que la vista previa coincida exactamente con lo que se exporta.
+        # Misma preparación (rotación) que on_guardar_etiqueta, para que la
+        # vista previa coincida exactamente con lo que se exporta.
         img_previa = preparar_foto_etiqueta(img)
 
         box_w, box_h = 480, 260
@@ -1837,16 +1815,12 @@ def main_dialog(iface):
         lbl_preview_etiqueta.setText("")
         lbl_preview_etiqueta.setPixmap(QPixmap.fromImage(composed))
 
-    def on_raster_etiqueta_changed():
-        _ajustar_tamanos_por_defecto()
-        update_preview_etiqueta()
-
     def on_guardar_etiqueta():
-        rlyr = _raster_etiqueta()
-        if rlyr is None:
+        path = _foto_etiqueta_path()
+        if not path:
             QMessageBox.warning(dialog, "Advertencia", "Selecciona primero una fotografía.")
             return
-        img = QImage(rlyr.source().split('|')[0])
+        img = QImage(path)
         if img.isNull():
             QMessageBox.critical(dialog, "Error", "No se pudo leer la fotografía seleccionada.")
             return
@@ -1894,13 +1868,11 @@ def main_dialog(iface):
 
         proj_crs = QgsProject.instance().crs()
 
-        # Las fotos de este laboratorio no tienen coordenadas geográficas reales,
-        # aunque estén "georreferenciadas" con un CRS de nombre real (ver CLAUDE.md,
-        # sección 6): son coordenadas de escala local. Reproyectar entre CRS
-        # distintos sobre estos datos degenerados no corrige nada, desplaza el
-        # contorno (mismo problema que ya se resolvió para export_geopackage en la
-        # 3.5 interna, quitando toda reproyección) — por eso aquí no se transforma:
-        # se exige que el proyecto ya esté en el CRS de la foto.
+        # Estas fotos no tienen coordenadas geográficas reales, aunque estén
+        # "georreferenciadas" con un CRS de nombre real: son coordenadas de
+        # escala local. Reproyectar entre CRS distintos sobre estos datos
+        # degenerados no corrige nada, desplaza el contorno — por eso aquí no
+        # se transforma: se exige que el proyecto ya esté en el CRS de la foto.
         if rlyr.crs() != proj_crs:
             QMessageBox.warning(dialog, "Aviso",
                                 "El CRS del proyecto no coincide con el de la foto "
@@ -2112,7 +2084,7 @@ def main_dialog(iface):
 
     btn_logo.clicked.connect(on_cargar_logo)
     btn_guardar_etiqueta.clicked.connect(on_guardar_etiqueta)
-    combo_raster_etiqueta.currentIndexChanged.connect(on_raster_etiqueta_changed)
+    btn_foto_etiqueta.clicked.connect(on_elegir_foto_etiqueta)
     date_edit.dateChanged.connect(update_preview_etiqueta)
     txt_extra.textChanged.connect(update_preview_etiqueta)
     spin_font.valueChanged.connect(update_preview_etiqueta)
