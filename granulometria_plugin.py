@@ -26,6 +26,7 @@ import os
 import math
 import tempfile
 import shutil
+from datetime import datetime
 
 from qgis.core import (
     QgsField, QgsProject, QgsGeometry, QgsWkbTypes, QgsVectorLayer, QgsFeature,
@@ -1088,7 +1089,7 @@ def parse_inches(value_str):
     return float(value_str)
 
 
-PLUGIN_VERSION = "1.0.6"
+PLUGIN_VERSION = "1.0.7"
 PLUGIN_FECHA = "2026-09-08"
 
 ACERCA_DE_QUE_HACE = (
@@ -1117,18 +1118,12 @@ ACERCA_DE_LICENCIA = (
 )
 
 ACERCA_DE_NOVEDADES = (
-    "Versión 1.0.6:\n"
-    "  • Pestaña «Etiquetar Foto»: la foto ahora se elige con un explorador "
-    "de archivos (cualquier .png/.jpg/.tif del disco, abre en la carpeta de "
-    "la foto ya seleccionada en «Preparar Foto») en vez de exigir que ya "
-    "esté cargada como capa ráster en el proyecto.\n"
-    "  • Ya no se reemplaza por negro el fondo blanco fuera del área "
-    "fotografiada: la foto se exporta con su fondo original (se conserva "
-    "la rotación a horizontal cuando la foto es vertical).\n"
-    "  • El campo de texto libre ahora sugiere como ejemplo el número de "
-    "muestra.\n"
-    "  • Títulos de sección y rótulos de selección de capa/foto ahora en "
-    "negrita y más grandes, para ubicarlos de un vistazo."
+    "Versión 1.0.7:\n"
+    "  • «Exportar Todo» ahora es un solo paso «Guardar como…»: se elige "
+    "ubicación y nombre, y el plugin crea una carpeta nueva con ese nombre "
+    "más la fecha y hora, guardando dentro los tres archivos con ese mismo "
+    "nombre sellado. Así exportaciones repetidas de la misma muestra no se "
+    "sobrescriben ni se mezclan con las de otras muestras."
 )
 
 
@@ -1201,22 +1196,22 @@ class ExportDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
 
-        # --- Carpeta destino ---
-        grp_folder = QGroupBox("Carpeta destino (servidor)")
-        lf = QHBoxLayout(grp_folder)
-        self.txt_folder = QLineEdit(last_folder)
-        btn_browse = QPushButton("Examinar…")
-        btn_browse.clicked.connect(self._browse_folder)
-        lf.addWidget(self.txt_folder)
+        # --- Guardar como ---
+        grp_save = QGroupBox("Guardar como (se crea una carpeta)")
+        lv = QVBoxLayout(grp_save)
+        lf = QHBoxLayout()
+        self.txt_out = QLineEdit(os.path.join(last_folder, default_name) if last_folder else default_name)
+        btn_browse = QPushButton("Guardar como…")
+        btn_browse.clicked.connect(self._browse_out)
+        lf.addWidget(self.txt_out)
         lf.addWidget(btn_browse)
-        layout.addWidget(grp_folder)
-
-        # --- Nombre base ---
-        grp_name = QGroupBox("Nombre base")
-        ln = QVBoxLayout(grp_name)
-        self.txt_name = QLineEdit(default_name)
-        ln.addWidget(self.txt_name)
-        layout.addWidget(grp_name)
+        lv.addLayout(lf)
+        lbl_save_info = QLabel("Se creará una carpeta con ese nombre + fecha y hora; "
+                               "los archivos llevarán el mismo nombre.")
+        lbl_save_info.setWordWrap(True)
+        lbl_save_info.setStyleSheet("font-size: 9pt;")
+        lv.addWidget(lbl_save_info)
+        layout.addWidget(grp_save)
 
         # --- Nota de coordenadas ---
         lbl_crs_info = QLabel("El GeoPackage se exporta con las coordenadas actuales "
@@ -1255,10 +1250,10 @@ class ExportDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-    def _browse_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "Selecciona la carpeta destino")
-        if folder:
-            self.txt_folder.setText(folder)
+    def _browse_out(self):
+        out_base, _ = QFileDialog.getSaveFileName(self, "Guardar como", self.txt_out.text())
+        if out_base:
+            self.txt_out.setText(out_base)
 
     def log(self, msg):
         self.log_box.setVisible(True)
@@ -1266,8 +1261,7 @@ class ExportDialog(QDialog):
 
     def values(self):
         return {
-            'folder': self.txt_folder.text().strip(),
-            'name': self.txt_name.text().strip(),
+            'out_base': self.txt_out.text().strip(),
             'do_gfi': self.chk_gfi.isChecked(),
             'do_info': self.chk_info.isChecked(),
             'do_gpkg': self.chk_gpkg.isChecked(),
@@ -1982,17 +1976,18 @@ def main_dialog(iface):
             return
 
         vals = exp_dlg.values()
-        folder = vals['folder']
-        name = vals['name']
-        if not folder or not os.path.isdir(folder):
-            QMessageBox.warning(dialog, "Advertencia", "Selecciona una carpeta destino válida.")
-            return
-        if not name:
-            QMessageBox.warning(dialog, "Advertencia", "Ingresa un nombre base.")
+        out_base = vals['out_base']
+        if not out_base or not os.path.isdir(os.path.dirname(out_base) or "."):
+            QMessageBox.warning(dialog, "Advertencia", "Selecciona una ubicación y nombre válidos.")
             return
 
+        stamp = datetime.now().strftime("%Y%m%d_%H%M")
+        name = f"{os.path.basename(out_base)}_{stamp}"
+        folder = os.path.join(os.path.dirname(out_base), name)
+        os.makedirs(folder, exist_ok=True)
+
         settings = QSettings()
-        settings.setValue("GranulometriaGFI/ultima_carpeta", folder)
+        settings.setValue("GranulometriaGFI/ultima_carpeta", os.path.dirname(out_base))
 
         generated = []
 
