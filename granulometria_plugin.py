@@ -1094,8 +1094,8 @@ def parse_inches(value_str):
     return float(value_str)
 
 
-PLUGIN_VERSION = "1.0.3"
-PLUGIN_FECHA = "2026-09-04"
+PLUGIN_VERSION = "1.0.4"
+PLUGIN_FECHA = "2026-09-08"
 
 ACERCA_DE_QUE_HACE = (
     "Este plugin mide el tamaño de los granos de roca en una foto y calcula qué "
@@ -1121,6 +1121,14 @@ ACERCA_DE_LICENCIA = (
 )
 
 ACERCA_DE_NOVEDADES = (
+    "Versión 1.0.4:\n"
+    "  • Corregido «Usar contorno del ráster»: si el CRS del proyecto no "
+    "coincidía con el de la foto, el contorno se reproyectaba y quedaba "
+    "desplazado con un área mal calculada. Estas fotos tienen un CRS con "
+    "nombre real (p. ej. PSAD56/UTM) pero coordenadas de escala local, no una "
+    "posición geodésica real, así que reproyectar las desplaza en vez de "
+    "corregirlas. Ahora el plugin no reproyecta: avisa y no continúa si el "
+    "CRS del proyecto no coincide ya con el de la foto.\n\n"
     "Versión 1.0.3 (primera versión estable, no experimental):\n"
     "  • Corregido un error de cuantización que redondeaba el diámetro de cada "
     "grano a 2 decimales en metros (escalones de 1 cm), lo que afectaba la "
@@ -1890,6 +1898,24 @@ def main_dialog(iface):
 
         proj_crs = QgsProject.instance().crs()
 
+        # Las fotos de este laboratorio no tienen coordenadas geográficas reales,
+        # aunque estén "georreferenciadas" con un CRS de nombre real (ver CLAUDE.md,
+        # sección 6): son coordenadas de escala local. Reproyectar entre CRS
+        # distintos sobre estos datos degenerados no corrige nada, desplaza el
+        # contorno (mismo problema que ya se resolvió para export_geopackage en la
+        # 3.5 interna, quitando toda reproyección) — por eso aquí no se transforma:
+        # se exige que el proyecto ya esté en el CRS de la foto.
+        if rlyr.crs() != proj_crs:
+            QMessageBox.warning(dialog, "Aviso",
+                                "El CRS del proyecto no coincide con el de la foto "
+                                "seleccionada. Estas fotos no tienen coordenadas "
+                                "geográficas reales aunque su CRS tenga nombre real, "
+                                "así que reproyectar el contorno lo desplazaría en vez "
+                                "de corregirlo. Iguala el CRS del proyecto al de la "
+                                "foto (Proyecto › Propiedades › SRC) y vuelve a "
+                                "intentarlo.")
+            return
+
         # Huella real de los píxeles con datos (no el rectángulo envolvente):
         # las ortofotos traen borde transparente y el bbox sobreestima el área.
         footprint_log = []
@@ -1897,15 +1923,6 @@ def main_dialog(iface):
         es_huella = geom is not None
         if not es_huella:
             geom = QgsGeometry.fromRect(rlyr.extent())
-
-        if rlyr.crs() != proj_crs:
-            tr = QgsCoordinateTransform(rlyr.crs(), proj_crs, QgsProject.instance())
-            try:
-                geom.transform(tr)
-            except Exception:
-                QMessageBox.critical(dialog, "Error",
-                                     "No se pudo reproyectar el contorno del ráster al CRS del proyecto.")
-                return
 
         if proj_crs.isGeographic():
             QMessageBox.warning(dialog, "Aviso",
