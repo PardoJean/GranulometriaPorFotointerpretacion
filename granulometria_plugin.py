@@ -1330,10 +1330,6 @@ class ExportDialog(QDialog):
 
 def main_dialog(iface):
     layers = get_polygon_layers()
-    if not layers:
-        iface.messageBar().pushMessage("Error", "No hay capas de polígono en el proyecto",
-                                       level=Qgis.MessageLevel.Critical, duration=5)
-        return
 
     dialog = QDialog()
     dialog.setWindowTitle("Análisis Granulométrico por Fotointerpretación")
